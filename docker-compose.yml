@@ -1,0 +1,66 @@
+name: llm-doc
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: llm-qdrant
+    environment:
+      QDRANT__SERVICE__API_KEY: ${QDRANT_API_KEY:-}
+      QDRANT__LOG_LEVEL: ${QDRANT_LOG_LEVEL:-INFO}
+    volumes:
+      - ./qdrant/storage:/qdrant/storage
+    ports:
+      - "${QDRANT_PORT:-6333}:6333"
+      - "${QDRANT_GRPC_PORT:-6334}:6334"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c ':> /dev/tcp/127.0.0.1/6333' || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: llm-ollama
+    profiles: ["local-llm"]
+    volumes:
+      - ./ollama/models:/root/.ollama
+    ports:
+      - "${OLLAMA_PORT:-11434}:11434"
+    restart: unless-stopped
+
+  app:
+    build:
+      context: ./app
+    container_name: llm-app
+    environment:
+      QDRANT_URL: http://qdrant:6333
+      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
+      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-docs}
+      LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434/v1}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b-instruct}
+      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-base}
+      HF_HOME: /app/.cache/huggingface
+      HF_HUB_DISABLE_TELEMETRY: "1"
+      OMP_NUM_THREADS: ${OMP_NUM_THREADS:-4}
+      INGEST_WORKERS: ${INGEST_WORKERS:-8}
+      EMBED_BATCH: ${EMBED_BATCH:-16}
+      APP_DB: /data/app/app.db
+      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+    volumes:
+      - ./data/docs:/data/docs:ro
+      - ./data/extracted:/data/extracted
+      - ./data/eval:/data/eval
+      - ./data/prompts:/data/prompts
+      - ./data/index_state:/data/index_state
+      - ./data/app:/data/app
+      - ./app/.cache:/app/.cache
+    ports:
+      - "${APP_PORT}:8000"
+    depends_on:
+      qdrant:
+        condition: service_healthy
+    command: uvicorn main:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped

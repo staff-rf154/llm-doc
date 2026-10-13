@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+app/.cache/
+qdrant/
+ollama/
+.env
+data/docs/
+data/extracted/
+data/app/
+data/index_state/
+data/prompts/
+data/eval/report.json

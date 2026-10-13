@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Кабинет администратора</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1e222b;
+    --border: #2a2f3a;
+    --text: #e6e9ef;
+    --muted: #8b93a5;
+    --accent: #4c8dff;
+    --ok: #35c48b;
+    --warn: #e0a34a;
+    --bad: #e0625f;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  }
+  header {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    position: sticky;
+    top: 0;
+    z-index: 5;
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  .spacer { flex: 1; }
+  nav { display: flex; gap: 6px; }
+  nav button.active { border-color: var(--accent); color: var(--accent); }
+  button {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 7px 13px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  button.danger:hover { border-color: var(--bad); color: var(--bad); }
+  input, textarea, select {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 8px 10px;
+    font: inherit;
+    width: 100%;
+  }
+  input:focus, textarea:focus { outline: none; border-color: var(--accent); }
+  main { padding: 20px; max-width: 1200px; margin: 0 auto; }
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+    margin-bottom: 16px;
+  }
+  .card h2 { font-size: 14px; margin: 0 0 12px; font-weight: 600; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 500; font-size: 12px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
+  .stat { background: var(--panel-2); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .stat .n { font-size: 22px; font-weight: 600; }
+  .stat .t { font-size: 12px; color: var(--muted); }
+  .row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .muted { color: var(--muted); font-size: 12px; }
+  .q { font-weight: 500; }
+  .a { color: var(--muted); margin: 4px 0; white-space: pre-wrap; }
+  .pill { display: inline-block; padding: 2px 8px; border-radius: 999px; border: 1px solid var(--border); font-size: 11px; }
+  .pill.up { color: var(--ok); border-color: var(--ok); }
+  .pill.down { color: var(--bad); border-color: var(--bad); }
+  .pill.admin { color: var(--accent); border-color: var(--accent); }
+  .bar { height: 8px; background: var(--panel-2); border-radius: 999px; overflow: hidden; margin: 4px 0 12px; }
+  .bar > div { height: 100%; background: var(--accent); }
+  .edit { display: grid; gap: 8px; }
+  textarea { min-height: 90px; resize: vertical; }
+  .hidden { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Кабинет администратора</h1>
+  <nav>
+    <button data-tab="overview" class="active">Обзор</button>
+    <button data-tab="users">Пользователи</button>
+    <button data-tab="requests">Оценки и правки</button>
+    <button data-tab="corrections">Исправления</button>
+    <button data-tab="index">Индексация</button>
+  </nav>
+  <div class="spacer"></div>
+  <button id="back">К чату</button>
+  <button id="logout">Выйти</button>
+</header>
+
+<main>
+  <section id="tab-overview" class="tab"></section>
+
+  <section id="tab-users" class="tab hidden">
+    <div class="card">
+      <h2>Новый пользователь</h2>
+      <div class="row">
+        <input id="new-username" placeholder="Логин" style="max-width:200px">
+        <input id="new-password" type="password" placeholder="Пароль" style="max-width:200px">
+        <select id="new-role" style="max-width:160px">
+          <option value="user">Пользователь</option>
+          <option value="admin">Администратор</option>
+        </select>
+        <button class="primary" id="create-user">Создать</button>
+        <span class="muted" id="users-msg"></span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Пользователи</h2>
+      <table id="users-table">
+        <thead><tr>
+          <th>ID</th><th>Логин</th><th>Роль</th><th>Статус</th>
+          <th>Запросов</th><th>👍</th><th>👎</th><th>Последний</th><th></th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="tab-requests" class="tab hidden">
+    <div class="card">
+      <div class="row">
+        <h2 style="margin:0">Запросы и оценки</h2>
+        <div class="spacer"></div>
+        <select id="req-filter" style="max-width:200px">
+          <option value="">Все оценки</option>
+          <option value="none">Без оценки</option>
+          <option value="down">Дизлайк</option>
+          <option value="up">Лайк</option>
+        </select>
+        <input id="req-search" placeholder="Поиск по тексту" style="max-width:240px">
+        <button id="req-reload">Обновить</button>
+      </div>
+      <div id="req-list"></div>
+    </div>
+  </section>
+
+  <section id="tab-corrections" class="tab hidden">
+    <div class="card">
+      <h2>Новое исправление ответа</h2>
+      <div class="edit">
+        <input id="corr-question" placeholder="Вопрос">
+        <textarea id="corr-answer" placeholder="Правильный ответ"></textarea>
+        <div class="row">
+          <button class="primary" id="corr-save">Сохранить исправление</button>
+          <span class="muted">Похожие вопросы будут получать этот ответ автоматически (порог 0.86).</span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Исправления</h2>
+      <table id="corr-table">
+        <thead><tr><th>ID</th><th>Вопрос</th><th>Ответ</th><th>Статус</th><th>Автор</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="tab-index" class="tab hidden">
+    <div class="card">
+      <h2>Индексация документации</h2>
+      <div class="row">
+        <button class="primary" id="idx-start">Запустить</button>
+        <button id="idx-pause">Пауза</button>
+        <button id="idx-resume">Продолжить</button>
+        <span class="muted" id="idx-collection"></span>
+      </div>
+      <div id="idx-state"></div>
+      <div class="bar"><div id="idx-bar" style="width:0%"></div></div>
+      <div class="muted" id="idx-progress"></div>
+    </div>
+  </section>
+</main>
+
+<script>
+const state = { reqFilter: '', reqSearch: '' };
+
+function j(url, options) {
+  return fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, options || {}))
+    .then(async res => {
+      if (res.status === 401 || res.status === 403) { location.href = '/'; throw new Error('no access'); }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.detail || ('HTTP ' + res.status));
+      return data;
+    });
+}
+
+function el(tag, props, children) {
+  const node = document.createElement(tag);
+  Object.assign(node, props || {});
+  (children || []).forEach(c => node.appendChild(c));
+  return node;
+}
+
+document.querySelectorAll('nav button').forEach(btn => {
+  btn.addEventListener('click', () => {
+    document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.querySelectorAll('.tab').forEach(s => s.classList.add('hidden'));
+    document.getElementById('tab-' + btn.dataset.tab).classList.remove('hidden');
+    loadTab(btn.dataset.tab);
+  });
+});
+
+function loadTab(tab) {
+  if (tab === 'overview') loadOverview();
+  if (tab === 'users') loadUsers();
+  if (tab === 'requests') loadRequests();
+  if (tab === 'corrections') loadCorrections();
+  if (tab === 'index') loadIndex();
+}
+
+document.getElementById('back').addEventListener('click', () => location.href = '/');
+document.getElementById('logout').addEventListener('click', async () => {
+  await fetch('/api/logout', { method: 'POST' });
+  location.href = '/';
+});
+
+async function loadOverview() {
+  const data = await j('/api/admin/stats');
+  const s = data.summary;
+  const root = document.getElementById('tab-overview');
+  while (root.firstChild) root.removeChild(root.firstChild);
+
+  const stats = el('div', { className: 'card' }, [
+    el('h2', { textContent: 'Сводка' }),
+    el('div', { className: 'grid' }, [
+      stat(s.users, 'пользователей'),
+      stat(s.requests, 'запросов'),
+      stat(s.likes, 'лайков'),
+      stat(s.dislikes, 'дизлайков'),
+      stat(s.corrections, 'исправлений'),
+      stat(s.active_corrections, 'активных исправлений')
+    ])
+  ]);
+  root.appendChild(stats);
+
+  const byUser = el('div', { className: 'card' }, [el('h2', { textContent: 'Запросы по пользователям' })]);
+  const t1 = el('table', {}, [el('thead', {}, [el('tr', {}, [
+    el('th', { textContent: 'Пользователь' }), el('th', { textContent: 'Роль' }),
+    el('th', { textContent: 'Запросов' }), el('th', { textContent: '👍' }),
+    el('th', { textContent: '👎' }), el('th', { textContent: 'Последний запрос' })
+  ])])]);
+  const b1 = el('tbody');
+  data.by_user.forEach(u => b1.appendChild(el('tr', {}, [
+    el('td', { textContent: u.username }),
+    el('td', { textContent: u.role }),
+    el('td', { textContent: u.requests }),
+    el('td', { textContent: u.likes }),
+    el('td', { textContent: u.dislikes }),
+    el('td', { textContent: u.last_request || '—' })
+  ])));
+  t1.appendChild(b1);
+  byUser.appendChild(t1);
+  root.appendChild(byUser);
+
+  const maxDay = Math.max(1, ...data.by_day.map(d => d.requests));
+  const byDay = el('div', { className: 'card' }, [el('h2', { textContent: 'Запросы по дням' })]);
+  data.by_day.forEach(d => {
+    const row = el('div', {}, [
+      el('div', { className: 'muted', textContent: d.day + ' · ' + d.requests + ' · ' + d.users + ' польз.' })
+    ]);
+    const bar = el('div', { className: 'bar' }, [
+      el('div', { style: 'width:' + Math.round(100 * d.requests / maxDay) + '%' })
+    ]);
+    byDay.append(row, bar);
+  });
+  root.appendChild(byDay);
+
+  const top = el('div', { className: 'card' }, [el('h2', { textContent: 'Топ вопросов' })]);
+  const t3 = el('table', {}, [el('thead', {}, [el('tr', {}, [
+    el('th', { textContent: 'Вопрос' }), el('th', { textContent: 'Раз' }),
+    el('th', { textContent: '👍' }), el('th', { textContent: '👎' })
+  ])])]);
+  const b3 = el('tbody');
+  data.top_questions.forEach(q => b3.appendChild(el('tr', {}, [
+    el('td', { textContent: q.question }), el('td', { textContent: q.n }),
+    el('td', { textContent: q.likes }), el('td', { textContent: q.dislikes })
+  ])));
+  t3.appendChild(b3);
+  top.appendChild(t3);
+  root.appendChild(top);
+}
+
+function stat(n, title) {
+  return el('div', { className: 'stat' }, [
+    el('div', { className: 'n', textContent: String(n) }),
+    el('div', { className: 't', textContent: title })
+  ]);
+}
+
+async function loadUsers() {
+  const data = await j('/api/admin/users');
+  const body = document.querySelector('#users-table tbody');
+  while (body.firstChild) body.removeChild(body.firstChild);
+  const msg = document.getElementById('users-msg');
+  data.users.forEach(u => {
+    body.appendChild(el('tr', {}, [
+      el('td', { textContent: u.id }),
+      el('td', { textContent: u.username }),
+      el('td', {}, [el('span', { className: 'pill ' + (u.role === 'admin' ? 'admin' : ''), textContent: u.role })]),
+      el('td', { textContent: u.active ? 'активен' : 'отключён' }),
+      el('td', { textContent: u.requests }),
+      el('td', { textContent: u.likes }),
+      el('td', { textContent: u.dislikes }),
+      el('td', { textContent: u.last_request || '—' }),
+      el('td', {}, [
+        el('button', { textContent: 'Пароль', onclick: () => resetPassword(u.id) }),
+        el('button', { textContent: u.active ? 'Отключить' : 'Включить', onclick: () => toggleUser(u.id, !u.active) }),
+        el('button', {
+          textContent: u.role === 'admin' ? 'Сделать user' : 'Сделать admin',
+          onclick: () => changeRole(u.id, u.role === 'admin' ? 'user' : 'admin')
+        }),
+        el('button', { className: 'danger', textContent: 'Удалить', onclick: () => removeUser(u.id, u.username) })
+      ])
+    ]));
+  });
+  msg.textContent = '';
+}
+
+document.getElementById('create-user').addEventListener('click', async () => {
+  const msg = document.getElementById('users-msg');
+  try {
+    await j('/api/admin/users', {
+      method: 'POST',
+      body: JSON.stringify({
+        username: document.getElementById('new-username').value.trim(),
+        password: document.getElementById('new-password').value,
+        role: document.getElementById('new-role').value
+      })
+    });
+    msg.textContent = 'Пользователь создан';
+    document.getElementById('new-username').value = '';
+    document.getElementById('new-password').value = '';
+    loadUsers();
+  } catch (err) { msg.textContent = err.message; }
+});
+
+async function resetPassword(id) {
+  const password = prompt('Новый пароль');
+  if (!password) return;
+  await j('/api/admin/users/reset-password', { method: 'POST', body: JSON.stringify({ user_id: id, password }) });
+  loadUsers();
+}
+
+async function toggleUser(id, active) {
+  await j('/api/admin/users/' + id, { method: 'PATCH', body: JSON.stringify({ active }) });
+  loadUsers();
+}
+
+async function changeRole(id, role) {
+  await j('/api/admin/users/' + id, { method: 'PATCH', body: JSON.stringify({ role }) });
+  loadUsers();
+}
+
+async function removeUser(id, username) {
+  if (!confirm('Удалить пользователя ' + username + '?')) return;
+  await j('/api/admin/users/' + id, { method: 'DELETE' });
+  loadUsers();
+}
+
+document.getElementById('req-filter').addEventListener('change', e => {
+  state.reqFilter = e.target.value;
+  loadRequests();
+});
+document.getElementById('req-search').addEventListener('input', e => {
+  state.reqSearch = e.target.value;
+});
+document.getElementById('req-reload').addEventListener('click', loadRequests);
+
+async function loadRequests() {
+  const params = new URLSearchParams({ limit: '50' });
+  if (state.reqFilter) params.set('vote', state.reqFilter);
+  if (state.reqSearch) params.set('search', state.reqSearch);
+  const data = await j('/api/admin/requests?' + params.toString());
+  const list = document.getElementById('req-list');
+  while (list.firstChild) list.removeChild(list.firstChild);
+  list.appendChild(el('div', { className: 'muted', textContent: 'Всего: ' + data.total }));
+  data.items.forEach(item => {
+    const vote = item.vote
+      ? el('span', { className: 'pill ' + item.vote, textContent: item.vote === 'up' ? '👍' : '👎' })
+      : el('span', { className: 'muted', textContent: 'без оценки' });
+    const box = el('div', { className: 'card' }, [
+      el('div', { className: 'muted', textContent: item.created_at + ' · ' + (item.username || 'гость') + ' · ' + item.latency_ms + ' мс · ' + item.sources + ' источников' }),
+      el('div', { className: 'q', textContent: item.question }),
+      el('div', { className: 'a', textContent: item.answer }),
+      el('div', {}, [vote, item.corrected ? el('span', { className: 'pill admin', textContent: 'исправленный' }) : document.createTextNode('')]),
+      item.rating_comment ? el('div', { className: 'muted', textContent: 'Комментарий: ' + item.rating_comment }) : document.createTextNode(''),
+      el('div', { className: 'row' }, [
+        el('button', { textContent: 'Исправить ответ', onclick: () => editAnswer(item) })
+      ])
+    ]);
+    list.appendChild(box);
+  });
+}
+
+function editAnswer(item) {
+  const box = document.querySelector('#req-list');
+  const wrap = el('div', { className: 'edit' });
+  const answer = el('textarea');
+  answer.value = item.answer;
+  const question = el('input');
+  question.value = item.question;
+  const correctionId = prompt('ID исправления из раздела «Исправления» (создайте новое, если пусто)', '');
+  wrap.append(question, answer, el('div', { className: 'row' }, [
+    el('button', {
+      className: 'primary',
+      textContent: 'Сохранить',
+      onclick: async () => {
+        if (correctionId) {
+          await j('/api/admin/corrections/' + correctionId, {
+            method: 'PATCH',
+            body: JSON.stringify({ question: question.value, answer: answer.value })
+          });
+        } else {
+          await j('/api/admin/corrections', {
+            method: 'POST',
+            body: JSON.stringify({ question: question.value, answer: answer.value })
+          });
+        }
+        wrap.remove();
+        loadCorrections();
+      }
+    }),
+    el('button', { textContent: 'Отмена', onclick: () => wrap.remove() })
+  ]));
+  box.insertBefore(wrap, box.firstChild);
+  wrap.scrollIntoView({ block: 'start' });
+}
+
+async function loadCorrections() {
+  const data = await j('/api/admin/corrections');
+  const body = document.querySelector('#corr-table tbody');
+  while (body.firstChild) body.removeChild(body.firstChild);
+  data.items.forEach(item => {
+    body.appendChild(el('tr', {}, [
+      el('td', { textContent: item.id }),
+      el('td', { textContent: item.question }),
+      el('td', { textContent: item.answer.slice(0, 200) }),
+      el('td', { textContent: item.status }),
+      el('td', { textContent: item.author }),
+      el('td', {}, [
+        el('button', {
+          textContent: item.status === 'active' ? 'Отключить' : 'Включить',
+          onclick: async () => {
+            await j('/api/admin/corrections/' + item.id, {
+              method: 'PATCH',
+              body: JSON.stringify({ status: item.status === 'active' ? 'disabled' : 'active' })
+            });
+            loadCorrections();
+          }
+        }),
+        el('button', {
+          className: 'danger',
+          textContent: 'Удалить',
+          onclick: async () => {
+            if (!confirm('Удалить исправление?')) return;
+            await j('/api/admin/corrections/' + item.id, { method: 'DELETE' });
+            loadCorrections();
+          }
+        })
+      ])
+    ]));
+  });
+}
+
+document.getElementById('corr-save').addEventListener('click', async () => {
+  try {
+    await j('/api/admin/corrections', {
+      method: 'POST',
+      body: JSON.stringify({
+        question: document.getElementById('corr-question').value.trim(),
+        answer: document.getElementById('corr-answer').value.trim()
+      })
+    });
+    document.getElementById('corr-answer').value = '';
+    loadCorrections();
+  } catch (err) { alert(err.message); }
+});
+
+let indexTimer = null;
+
+async function loadIndex() {
+  if (indexTimer) clearInterval(indexTimer);
+  const data = await j('/api/admin/index');
+  const percent = data.total ? Math.round(100 * data.done / data.total) : 0;
+  document.getElementById('idx-collection').textContent =
+    'Активная коллекция: ' + (data.collection_info.collection || '—') + ', точек: ' + data.collection_info.points;
+  document.getElementById('idx-state').innerHTML =
+    '<span class="muted">Статус: </span><b>' + data.status + '</b>' +
+    (data.error ? ' <span style="color:var(--bad)">' + data.error + '</span>' : '') +
+    (data.failed_files && data.failed_files.length
+      ? ' <span class="muted">ошибок файлов: ' + data.failed_files.length + '</span>' : '');
+  document.getElementById('idx-bar').style.width = percent + '%';
+  document.getElementById('idx-progress').textContent =
+    data.done + ' / ' + data.total + ' чанков, пропущено файлов: ' + data.skipped_files;
+  if (data.status === 'running' || data.status === 'paused') indexTimer = setTimeout(loadIndex, 3000);
+}
+
+document.getElementById('idx-start').addEventListener('click', async () => { await j('/api/admin/index/start', { method: 'POST' }); loadIndex(); });
+document.getElementById('idx-pause').addEventListener('click', async () => { await j('/api/admin/index/pause', { method: 'POST' }); loadIndex(); });
+document.getElementById('idx-resume').addEventListener('click', async () => { await j('/api/admin/index/resume', { method: 'POST' }); loadIndex(); });
+
+loadOverview();
+setInterval(loadOverview, 30000);
+</script>
+</body>
+</html>

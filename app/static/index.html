@@ -1,0 +1,578 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>База знаний company</title>
+<style>
+  :root {
+    --bg: #0f1115;
+    --panel: #171a21;
+    --panel-2: #1e222b;
+    --border: #2a2f3a;
+    --text: #e6e9ef;
+    --muted: #8b93a5;
+    --accent: #4c8dff;
+    --ok: #35c48b;
+    --warn: #e0a34a;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+  header {
+    padding: 12px 20px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    background: var(--panel);
+  }
+  header h1 { font-size: 16px; margin: 0; font-weight: 600; }
+  .badge {
+    font-size: 11px;
+    color: var(--muted);
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 3px 9px;
+  }
+  .spacer { flex: 1; }
+  button {
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 7px 13px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  button:hover { border-color: var(--accent); }
+  #log {
+    flex: 1;
+    overflow-y: auto;
+    padding: 24px 20px 8px;
+  }
+  #log-inner { max-width: 900px; margin: 0 auto; }
+  .msg { margin-bottom: 22px; }
+  .msg .who {
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: .06em;
+    color: var(--muted);
+    margin-bottom: 6px;
+  }
+  .msg.user .body { color: var(--text); font-weight: 500; }
+  .msg.bot .body { color: var(--text); }
+  .body { white-space: pre-wrap; }
+  .msg.user .body {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 9px;
+    padding: 11px 14px;
+  }
+  .status { font-size: 12px; color: var(--muted); margin-top: 6px; }
+  .grounded { color: var(--ok); }
+  .ungrounded { color: var(--warn); }
+  .corrected { color: var(--accent); }
+  .sources { margin-top: 10px; }
+  .sources summary {
+    cursor: pointer;
+    font-size: 12px;
+    color: var(--accent);
+    user-select: none;
+  }
+  .src {
+    border-left: 2px solid var(--border);
+    padding: 7px 0 7px 12px;
+    margin-top: 8px;
+  }
+  .src .meta {
+    font-size: 11px;
+    color: var(--muted);
+    margin-bottom: 4px;
+  }
+  .src .txt {
+    font-size: 13px;
+    color: var(--muted);
+    white-space: pre-wrap;
+    max-height: 130px;
+    overflow: hidden;
+  }
+  .src.open .txt { max-height: none; }
+  .cursor { display: inline-block; width: 7px; background: var(--accent); animation: b 1s steps(2) infinite; }
+  @keyframes b { 50% { opacity: 0 } }
+  footer {
+    border-top: 1px solid var(--border);
+    background: var(--panel);
+    padding: 14px 20px;
+  }
+  #form { max-width: 900px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; }
+  textarea {
+    flex: 1;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 11px 13px;
+    font: inherit;
+    resize: none;
+    max-height: 180px;
+  }
+  textarea:focus { outline: none; border-color: var(--accent); }
+  #send { padding: 11px 22px; background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
+  #send:disabled { opacity: .45; cursor: not-allowed; }
+  .hint { max-width: 900px; margin: 8px auto 0; font-size: 11px; color: var(--muted); }
+  .examples { max-width: 900px; margin: 0 auto 16px; display: flex; flex-wrap: wrap; gap: 8px; }
+  .examples button { font-size: 12px; padding: 6px 11px; }
+  .examples-title { width: 100%; font-size: 12px; color: var(--muted); }
+  .capabilities {
+    max-width: 900px;
+    margin: 0 auto 22px;
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 16px 18px;
+  }
+  .capabilities h2 { font-size: 14px; margin: 0 0 12px; font-weight: 600; }
+  .capabilities .group { margin-bottom: 12px; }
+  .capabilities .group:last-child { margin-bottom: 0; }
+  .capabilities .group-title { font-size: 12px; color: var(--accent); margin-bottom: 4px; }
+  .capabilities ul { margin: 0; padding-left: 18px; }
+  .capabilities li { font-size: 13px; color: var(--muted); }
+  #auth {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 24px;
+  }
+  #auth .card {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    padding: 24px;
+    width: 340px;
+  }
+  #auth h2 { margin: 0 0 16px; font-size: 16px; }
+  #auth input {
+    width: 100%;
+    margin-bottom: 10px;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 9px 11px;
+    font: inherit;
+  }
+  #auth input:focus { outline: none; border-color: var(--accent); }
+  #auth button { width: 100%; background: var(--accent); border-color: var(--accent); color: #fff; }
+  #auth .err { color: var(--warn); font-size: 12px; margin-top: 10px; }
+  .rate { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
+  .rate button { padding: 4px 10px; font-size: 12px; }
+  .rate button.active { border-color: var(--accent); color: var(--accent); }
+  .rate input {
+    flex: 1;
+    background: var(--panel-2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 7px;
+    padding: 5px 9px;
+    font: inherit;
+    font-size: 12px;
+  }
+  #who { font-size: 12px; color: var(--muted); }
+</style>
+</head>
+<body>
+<div id="auth">
+  <form class="card" id="login-form">
+    <h2>Вход в базу знаний</h2>
+    <input id="login-user" placeholder="Логин" autocomplete="username">
+    <input id="login-pass" type="password" placeholder="Пароль" autocomplete="current-password">
+    <button type="submit">Войти</button>
+    <div class="err" id="login-err"></div>
+  </form>
+</div>
+
+<div id="app" hidden>
+<header>
+  <h1>База знаний company</h1>
+  <span class="badge" id="model">—</span>
+  <span class="badge" id="index">—</span>
+  <div class="spacer"></div>
+  <span id="who"></span>
+  <button id="admin-link" hidden>Админ</button>
+  <button id="logout">Выйти</button>
+  <button id="clear">Очистить</button>
+</header>
+
+<div id="log"><div id="log-inner">
+  <div class="capabilities" id="capabilities"></div>
+  <div class="examples" id="examples"></div>
+</div></div>
+
+<footer>
+  <form id="form">
+    <textarea id="input" rows="1" placeholder="Задайте вопрос по документации... (Enter — отправить, Shift+Enter — новая строка)"></textarea>
+    <button id="send" type="submit">Спросить</button>
+  </form>
+  <div class="hint">Ответы формируются только по проиндексированной документации. Проверьте источники перед использованием.</div>
+</footer>
+</div>
+
+<script>
+const log = document.getElementById('log');
+const inner = document.getElementById('log-inner');
+const form = document.getElementById('form');
+const input = document.getElementById('input');
+const send = document.getElementById('send');
+const examples = document.getElementById('examples');
+const capabilitiesEl = document.getElementById('capabilities');
+const history = [];
+let busy = false;
+let me = { id: null, username: '', role: 'guest' };
+
+const appEl = document.getElementById('app');
+const authEl = document.getElementById('auth');
+
+async function api(path, options) {
+  const res = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, options || {}));
+  if (res.status === 401) {
+    showLogin();
+    throw new Error('Требуется вход');
+  }
+  return res;
+}
+
+function showLogin() {
+  authEl.hidden = false;
+  appEl.hidden = true;
+}
+
+function showApp(user) {
+  me = user;
+  authEl.hidden = true;
+  appEl.hidden = false;
+  document.getElementById('who').textContent = user.username + (user.role === 'admin' ? ' (админ)' : '');
+  document.getElementById('admin-link').hidden = user.role !== 'admin';
+}
+
+document.getElementById('login-form').addEventListener('submit', async e => {
+  e.preventDefault();
+  const err = document.getElementById('login-err');
+  err.textContent = '';
+  const res = await fetch('/api/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      username: document.getElementById('login-user').value.trim(),
+      password: document.getElementById('login-pass').value
+    })
+  });
+  if (!res.ok) {
+    err.textContent = 'Неверный логин или пароль';
+    return;
+  }
+  showApp(await res.json());
+  bootstrap();
+});
+
+document.getElementById('logout').addEventListener('click', async () => {
+  await fetch('/api/logout', { method: 'POST' });
+  showLogin();
+});
+
+document.getElementById('admin-link').addEventListener('click', () => {
+  location.href = '/admin';
+});
+
+function bootstrap() {
+  fetch('/health').then(r => r.json()).then(d => {
+    document.getElementById('model').textContent = d.llm_model;
+  });
+  fetch('/collection').then(r => r.json()).then(d => {
+    document.getElementById('index').textContent = d.exists ? d.points + ' фрагментов' : 'индекс пуст';
+  });
+  loadPrompts();
+  loadCapabilities();
+}
+
+fetch('/api/me').then(r => r.json()).then(user => {
+  if (user.id) { showApp(user); bootstrap(); } else { showLogin(); }
+});
+
+function renderPrompts(items) {
+  examples.innerHTML = '';
+  if (!items.length) return;
+  const title = document.createElement('div');
+  title.className = 'examples-title';
+  title.textContent = 'Попробуйте спросить:';
+  examples.appendChild(title);
+  items.forEach(text => {
+    const btn = document.createElement('button');
+    btn.textContent = text;
+    examples.appendChild(btn);
+  });
+}
+
+function loadPrompts() {
+  return fetch('/prompts').then(r => r.json()).then(d => renderPrompts(d.prompts || []))
+    .catch(() => renderPrompts([]));
+}
+
+function renderCapabilities(groups) {
+  capabilitiesEl.innerHTML = '';
+  if (!groups || !groups.length) return;
+  const title = document.createElement('h2');
+  title.textContent = 'Что я умею';
+  capabilitiesEl.appendChild(title);
+  groups.forEach(group => {
+    const box = document.createElement('div');
+    box.className = 'group';
+    const groupTitle = document.createElement('div');
+    groupTitle.className = 'group-title';
+    groupTitle.textContent = group.title;
+    const list = document.createElement('ul');
+    group.items.forEach(item => {
+      const li = document.createElement('li');
+      li.textContent = item;
+      list.appendChild(li);
+    });
+    box.append(groupTitle, list);
+    capabilitiesEl.appendChild(box);
+  });
+}
+
+function loadCapabilities() {
+  return fetch('/capabilities').then(r => r.json()).then(d => renderCapabilities(d.groups || []))
+    .catch(() => renderCapabilities([]));
+}
+
+function scroll() { log.scrollTop = log.scrollHeight; }
+
+function addUser(text) {
+  const el = document.createElement('div');
+  el.className = 'msg user';
+  el.innerHTML = '<div class="who">Вы</div>';
+  const body = document.createElement('div');
+  body.className = 'body';
+  body.textContent = text;
+  el.appendChild(body);
+  inner.appendChild(el);
+  scroll();
+}
+
+function addBot() {
+  const el = document.createElement('div');
+  el.className = 'msg bot';
+  el.innerHTML = '<div class="who">Ассистент</div>';
+  const body = document.createElement('div');
+  body.className = 'body';
+  const cursor = document.createElement('span');
+  cursor.className = 'cursor';
+  body.appendChild(cursor);
+  const status = document.createElement('div');
+  status.className = 'status';
+  const sources = document.createElement('details');
+  sources.className = 'sources';
+  const rate = document.createElement('div');
+  rate.className = 'rate';
+  rate.hidden = true;
+  el.append(body, status, sources, rate);
+  inner.append(el);
+  scroll();
+  return { body, cursor, status, sources, rate, suggestions: null, requestId: null };
+}
+
+function buildRate(box, requestId) {
+  while (box.firstChild) box.removeChild(box.firstChild);
+  box.hidden = false;
+  const up = document.createElement('button');
+  up.textContent = '👍';
+  const down = document.createElement('button');
+  down.textContent = '👎';
+  const comment = document.createElement('input');
+  comment.placeholder = 'Комментарий (необязательно)';
+  const sendComment = document.createElement('button');
+  sendComment.textContent = 'Отправить';
+
+  let vote = null;
+  async function save(nextVote) {
+    vote = vote === nextVote ? null : nextVote;
+    up.classList.toggle('active', vote === 'up');
+    down.classList.toggle('active', vote === 'down');
+    if (!vote) return;
+    await fetch('/api/rate/' + requestId, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vote, comment: comment.value })
+    });
+  }
+
+  up.addEventListener('click', () => save('up'));
+  down.addEventListener('click', () => save('down'));
+  sendComment.addEventListener('click', () => { if (vote) save(vote); });
+  box.append(up, down, comment, sendComment);
+}
+
+function renderSources(el, sources) {
+  if (!sources.length) return;
+  const summary = document.createElement('summary');
+  summary.textContent = 'Источники (' + sources.length + ')';
+  const items = sources.map(s => {
+    const item = document.createElement('div');
+    item.className = 'src';
+    const meta = document.createElement('div');
+    meta.className = 'meta';
+    meta.textContent = s.citation + '  ·  score ' + s.score;
+    const txt = document.createElement('div');
+    txt.className = 'txt';
+    txt.textContent = s.text;
+    item.append(meta, txt);
+    item.addEventListener('click', () => item.classList.toggle('open'));
+    return item;
+  });
+  while (el.firstChild) el.removeChild(el.firstChild);
+  el.appendChild(summary);
+  items.forEach(item => el.appendChild(item));
+}
+
+function renderSuggestions(items) {
+  const box = document.createElement('div');
+  box.className = 'examples';
+  box.id = 'suggestions';
+  if (!items.length) return box;
+  const title = document.createElement('div');
+  title.className = 'examples-title';
+  title.textContent = 'Примеры вопросов по вашей базе знаний:';
+  box.appendChild(title);
+  items.forEach(text => {
+    const btn = document.createElement('button');
+    btn.textContent = text;
+    box.appendChild(btn);
+  });
+  box.addEventListener('click', e => {
+    if (e.target.tagName === 'BUTTON') ask(e.target.textContent);
+  });
+  return box;
+}
+
+async function ask(question) {
+  if (busy || !question.trim()) return;
+  busy = true;
+  send.disabled = true;
+  examples.remove();
+
+  addUser(question);
+  history.push({ role: 'user', content: question });
+
+  const ui = addBot();
+  const answerEl = document.createElement('div');
+  let answer = '';
+
+  try {
+    const res = await fetch('/chat', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ messages: history })
+    });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      const parts = buffer.split('\n\n');
+      buffer = parts.pop();
+
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith('data:')) continue;
+        const event = JSON.parse(line.slice(5));
+        if (event.type === 'token') {
+          answer += event.data;
+          ui.body.textContent = answer;
+          ui.cursor.remove();
+          ui.body.appendChild(ui.cursor);
+          scroll();
+        } else if (event.type === 'prompts') {
+          const previous = document.getElementById('suggestions');
+          if (previous) previous.remove();
+          ui.suggestions = renderSuggestions(event.data || []);
+          inner.appendChild(ui.suggestions);
+          scroll();
+        } else if (event.type === 'request') {
+          ui.requestId = event.data.request_id;
+        } else if (event.type === 'sources') {
+          renderSources(ui.sources, event.data);
+        } else if (event.type === 'meta') {
+          ui.status.innerHTML = event.data.corrected
+            ? '<span class="corrected">Ответ скорректирован администратором</span>'
+            : (event.data.grounded
+              ? '<span class="grounded">Ответ основан на документации</span>'
+              : '<span class="ungrounded">В документации нет прямого ответа</span>');
+        } else if (event.type === 'error') {
+          ui.status.textContent = event.data;
+        }
+      }
+    }
+  } catch (err) {
+    ui.status.textContent = 'Ошибка: ' + err.message;
+  } finally {
+    ui.cursor.remove();
+    if (!answer) ui.body.textContent = '—';
+    if (ui.requestId) buildRate(ui.rate, ui.requestId);
+    history.push({ role: 'assistant', content: answer });
+    busy = false;
+    send.disabled = false;
+    scroll();
+  }
+}
+
+form.addEventListener('submit', e => {
+  e.preventDefault();
+  const text = input.value.trim();
+  input.value = '';
+  input.style.height = 'auto';
+  ask(text);
+});
+
+input.addEventListener('keydown', e => {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    form.requestSubmit();
+  }
+});
+
+input.addEventListener('input', () => {
+  input.style.height = 'auto';
+  input.style.height = Math.min(input.scrollHeight, 180) + 'px';
+});
+
+examples.addEventListener('click', e => {
+  if (e.target.tagName === 'BUTTON') ask(e.target.textContent);
+});
+
+document.getElementById('clear').addEventListener('click', () => {
+  history.length = 0;
+  inner.innerHTML = '';
+  inner.append(capabilitiesEl, examples);
+  renderPrompts([]);
+  loadPrompts();
+  loadCapabilities();
+});
+
+input.focus();
+</script>
+</body>
+</html>
