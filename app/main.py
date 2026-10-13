@@ -12,6 +12,7 @@ import ingest
 import promptdb
 import prompts
 import rag
+import synonymdb
 import vectorstore
 import web
 from fastapi import Depends
@@ -36,6 +37,12 @@ def startup() -> None:
         print(f"исправлений в индексе: {total}")
     except Exception as exc:
         print(f"индекс исправлений недоступен: {exc}")
+    try:
+        import synonyms
+
+        print(f"терминов в словаре синонимов: {synonyms.seed_if_empty()}")
+    except Exception as exc:
+        print(f"словарь синонимов недоступен: {exc}")
 
 
 class LoginRequest(BaseModel):
@@ -123,6 +130,12 @@ def capabilities() -> dict:
         "prompts": capabilities_mod.suggestions(),
         "text": capabilities_mod.render(),
     }
+
+
+@app.get("/synonyms")
+def synonyms() -> dict:
+    """Словарь синонимов, расширяющий поисковый запрос."""
+    return {"items": synonymdb.list_terms(), "total": synonymdb.count()}
 
 
 @app.get("/reindex")

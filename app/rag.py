@@ -26,6 +26,7 @@ class Answer:
     grounded: bool
     corrected: bool = False
     request_id: int | None = None
+    reference: dict | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -33,6 +34,7 @@ class Answer:
             "grounded": self.grounded,
             "corrected": self.corrected,
             "request_id": self.request_id,
+            "reference": self.reference,
             "sources": [
                 {
                     "source": c.source,
@@ -48,27 +50,45 @@ class Answer:
 NO_ANSWER_MARKER = "нет информации"
 
 
+def query_variants(query: str) -> list[str]:
+    """Варианты поискового запроса с подстановкой синонимов из словаря."""
+    try:
+        import synonymdb
+
+        return synonymdb.expand(query, max_variants=config.SYNONYMS_MAX_VARIANTS)
+    except Exception:
+        return [query]
+
+
 def retrieve(query: str, top_k: int | None = None) -> list[RetrievedChunk]:
     top_k = top_k or config.RETRIEVE_TOP_K
     client = vs.get_qdrant()
     target = vs.target_name()
     if not client.collection_exists(target):
         return []
-    results = client.query_points(
-        collection_name=target,
-        query=vs.embed_query(query),
-        limit=top_k,
-        with_payload=True,
-    ).points
-    return [
-        RetrievedChunk(
-            text=payload.get("text", ""),
-            source=payload.get("source", "unknown"),
-            chunk=payload.get("chunk", 0),
-            score=float(score),
-        )
-        for payload, score in ((p.payload, p.score) for p in results)
-    ]
+
+    merged: dict[tuple[str, int], RetrievedChunk] = {}
+    for variant in query_variants(query):
+        results = client.query_points(
+            collection_name=target,
+            query=vs.embed_query(variant),
+            limit=top_k,
+            with_payload=True,
+        ).points
+        for point in results:
+            payload = point.payload or {}
+            chunk = RetrievedChunk(
+                text=payload.get("text", ""),
+                source=payload.get("source", "unknown"),
+                chunk=int(payload.get("chunk", 0)),
+                score=float(point.score),
+            )
+            key = (chunk.source, chunk.chunk)
+            previous = merged.get(key)
+            if previous is None or chunk.score > previous.score:
+                merged[key] = chunk
+
+    return sorted(merged.values(), key=lambda c: c.score, reverse=True)[:top_k]
 
 
 def build_prompt(
@@ -129,7 +149,6 @@ def find_correction(question: str) -> dict | None:
     except Exception:
         return None
 
-
 def correction_examples(question: str) -> list[dict]:
     try:
         import corrections
@@ -151,6 +170,11 @@ def ask(question: str, top_k: int | None = None) -> Answer:
             chunks=[],
             grounded=True,
             corrected=True,
+            reference={
+                "doc_name": exact.get("doc_name", ""),
+                "doc_pages": exact.get("doc_pages", ""),
+                "doc_ref": exact.get("doc_ref", ""),
+            },
         )
 
     chunks = retrieve(question, top_k)

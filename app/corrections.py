@@ -60,6 +60,9 @@ def reindex() -> int:
             "correction_id": correction_id,
             "question": row["question"],
             "answer": row["answer"],
+            "doc_name": row["doc_name"],
+            "doc_pages": row["doc_pages"],
+            "doc_ref": row["doc_ref"],
             "author": row["author"],
             "updated_at": row["updated_at"],
         }
@@ -110,6 +113,9 @@ def search(question: str, limit: int = 3) -> list[dict]:
             "correction_id": int((p.payload or {}).get("correction_id", p.id)),
             "question": (p.payload or {}).get("question", ""),
             "answer": (p.payload or {}).get("answer", ""),
+            "doc_name": (p.payload or {}).get("doc_name", ""),
+            "doc_pages": (p.payload or {}).get("doc_pages", ""),
+            "doc_ref": (p.payload or {}).get("doc_ref", ""),
             "score": float(p.score),
         }
         for p in points

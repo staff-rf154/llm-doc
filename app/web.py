@@ -55,13 +55,19 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
 
     exact = rag.find_correction(question)
     if exact:
+        reference = {
+            "doc_name": exact.get("doc_name", ""),
+            "doc_pages": exact.get("doc_pages", ""),
+            "doc_ref": exact.get("doc_ref", ""),
+        }
         request_id = appdb.log_request(
             user, question, exact["answer"], True, True, 0,
-            int((time.time() - started) * 1000),
+            int((time.time() - started) * 1000), reference,
         )
         payload = [
             {"type": "token", "data": exact["answer"]},
             {"type": "sources", "data": []},
+            {"type": "reference", "data": reference},
             {"type": "request", "data": {"request_id": request_id}},
             {"type": "meta", "data": {"grounded": True, "corrected": True}},
             {"type": "done", "data": ""},

@@ -100,6 +100,7 @@
     <button data-tab="users">Пользователи</button>
     <button data-tab="requests">Оценки и правки</button>
     <button data-tab="corrections">Исправления</button>
+    <button data-tab="synonyms">Синонимы</button>
     <button data-tab="index">Индексация</button>
   </nav>
   <div class="spacer"></div>
@@ -159,17 +160,64 @@
       <h2>Новое исправление ответа</h2>
       <div class="edit">
         <input id="corr-question" placeholder="Вопрос">
+        <div class="row">
+          <select id="corr-doc" style="max-width:340px"></select>
+          <input id="corr-pages" placeholder="Страницы, например 12-15" style="max-width:200px">
+          <button id="corr-extract">Подставить текст страниц</button>
+        </div>
         <textarea id="corr-answer" placeholder="Правильный ответ"></textarea>
         <div class="row">
           <button class="primary" id="corr-save">Сохранить исправление</button>
-          <span class="muted">Похожие вопросы будут получать этот ответ автоматически (порог 0.86).</span>
+          <span class="muted">Документ и номера страниц обязательны. Текст страниц подставляется как основа — его можно править.</span>
         </div>
+        <span class="muted" id="corr-msg"></span>
       </div>
     </div>
     <div class="card">
       <h2>Исправления</h2>
       <table id="corr-table">
-        <thead><tr><th>ID</th><th>Вопрос</th><th>Ответ</th><th>Статус</th><th>Автор</th><th></th></tr></thead>
+        <thead><tr><th>ID</th><th>Вопрос</th><th>Ответ</th><th>Ссылка</th><th>Статус</th><th>Автор</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
+  <section id="tab-synonyms" class="tab hidden">
+    <div class="card">
+      <h2>Проверка расширения запроса</h2>
+      <div class="row">
+        <input id="syn-check" placeholder="Введите запрос, чтобы увидеть варианты поиска" style="max-width:420px">
+        <button id="syn-check-btn">Показать варианты</button>
+      </div>
+      <div class="muted" id="syn-check-out"></div>
+    </div>
+    <div class="card">
+      <h2>Новый термин</h2>
+      <div class="row">
+        <input id="syn-term" placeholder="Слово" style="max-width:220px">
+        <input id="syn-list" placeholder="Синонимы через запятую" style="max-width:420px">
+        <button class="primary" id="syn-save">Сохранить</button>
+        <span class="muted" id="syn-msg"></span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Массовый импорт</h2>
+      <div class="edit">
+        <textarea id="syn-bulk" placeholder="По строке: слово — синоним1, синоним2"></textarea>
+        <div class="row">
+          <button id="syn-import">Импортировать</button>
+          <span class="muted">Формат строки: <code>слово — синоним1, синоним2</code>. Существующие термины обновляются.</span>
+        </div>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Словарь</h2>
+      <div class="row">
+        <input id="syn-search" placeholder="Фильтр по термину или синониму" style="max-width:320px">
+        <span class="muted" id="syn-count"></span>
+      </div>
+      <table id="syn-table">
+        <thead><tr><th>Термин</th><th>Синонимы</th><th>Автор</th><th>Изменён</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -226,6 +274,7 @@ function loadTab(tab) {
   if (tab === 'users') loadUsers();
   if (tab === 'requests') loadRequests();
   if (tab === 'corrections') loadCorrections();
+  if (tab === 'synonyms') loadSynonyms();
   if (tab === 'index') loadIndex();
 }
 
@@ -414,40 +463,82 @@ async function loadRequests() {
 }
 
 function editAnswer(item) {
-  const box = document.querySelector('#req-list');
+  const box = document.getElementById('req-list');
   const wrap = el('div', { className: 'edit' });
   const answer = el('textarea');
   answer.value = item.answer;
   const question = el('input');
   question.value = item.question;
-  const correctionId = prompt('ID исправления из раздела «Исправления» (создайте новое, если пусто)', '');
-  wrap.append(question, answer, el('div', { className: 'row' }, [
-    el('button', {
-      className: 'primary',
-      textContent: 'Сохранить',
-      onclick: async () => {
-        if (correctionId) {
-          await j('/api/admin/corrections/' + correctionId, {
-            method: 'PATCH',
-            body: JSON.stringify({ question: question.value, answer: answer.value })
-          });
-        } else {
-          await j('/api/admin/corrections', {
-            method: 'POST',
-            body: JSON.stringify({ question: question.value, answer: answer.value })
-          });
-        }
-        wrap.remove();
-        loadCorrections();
+  const docSelect = el('select', { style: 'max-width:320px' });
+  const pages = el('input', { placeholder: 'Страницы, например 12-15', style: 'max-width:180px' });
+  const note = el('div', { className: 'muted' });
+  const extractBtn = el('button', { textContent: 'Подставить текст страниц' });
+  const extractRow = el('div', { className: 'row' }, [docSelect, pages, extractBtn]);
+  const saveBtn = el('button', { className: 'primary', textContent: 'Сохранить исправление' });
+
+  fillDocumentSelect(docSelect, item.doc_name || '').then(() => {
+    pages.value = item.doc_pages || '';
+    if (item.doc_ref) {
+      note.textContent = 'Текущая ссылка: ' + item.doc_ref;
+      pages.value = pages.value || item.doc_pages || '';
+    }
+  });
+
+  extractBtn.addEventListener('click', async () => {
+    if (!docSelect.value || !pages.value.trim()) { note.textContent = 'Укажите документ и страницы'; return; }
+    try {
+      const data = await extractPages(docSelect.value, pages.value.trim());
+      answer.value = answer.value ? answer.value + '\n\n' + data.text : data.text;
+      note.textContent = 'Текст страниц подставлен: ' + data.doc_ref;
+    } catch (err) { note.textContent = err.message; }
+  });
+
+  saveBtn.addEventListener('click', async () => {
+    const docName = docSelect.value;
+    const docPages = pages.value.trim();
+    if (!docName || !docPages) {
+      note.textContent = 'Документ и номера страниц обязательны';
+      return;
+    }
+    try {
+      const correctionId = prompt('ID исправления из раздела «Исправления» (пусто — создать новое)', '');
+      if (correctionId) {
+        await j('/api/admin/corrections/' + correctionId, {
+          method: 'PATCH',
+          body: JSON.stringify({
+            question: question.value,
+            answer: answer.value,
+            doc_name: docName,
+            doc_pages: docPages
+          })
+        });
+      } else {
+        await j('/api/admin/corrections', {
+          method: 'POST',
+          body: JSON.stringify({
+            question: question.value,
+            answer: answer.value,
+            doc_name: docName,
+            doc_pages: docPages
+          })
+        });
       }
-    }),
+      note.textContent = 'Сохранено';
+      loadCorrections();
+    } catch (err) { note.textContent = err.message; }
+  });
+
+  wrap.append(question, extractRow, answer, el('div', { className: 'row' }, [
+    saveBtn,
     el('button', { textContent: 'Отмена', onclick: () => wrap.remove() })
-  ]));
+  ]), note);
   box.insertBefore(wrap, box.firstChild);
   wrap.scrollIntoView({ block: 'start' });
 }
 
 async function loadCorrections() {
+  await loadDocuments();
+  fillDocumentSelect(document.getElementById('corr-doc'));
   const data = await j('/api/admin/corrections');
   const body = document.querySelector('#corr-table tbody');
   while (body.firstChild) body.removeChild(body.firstChild);
@@ -456,9 +547,11 @@ async function loadCorrections() {
       el('td', { textContent: item.id }),
       el('td', { textContent: item.question }),
       el('td', { textContent: item.answer.slice(0, 200) }),
+      el('td', { textContent: item.doc_ref || '—' }),
       el('td', { textContent: item.status }),
       el('td', { textContent: item.author }),
       el('td', {}, [
+        el('button', { textContent: 'Править', onclick: () => editCorrection(item) }),
         el('button', {
           textContent: item.status === 'active' ? 'Отключить' : 'Включить',
           onclick: async () => {
@@ -483,21 +576,225 @@ async function loadCorrections() {
   });
 }
 
-document.getElementById('corr-save').addEventListener('click', async () => {
+function editCorrection(item) {
+  const msg = document.getElementById('corr-msg');
+  msg.textContent = '';
+  document.getElementById('corr-question').value = item.question;
+  document.getElementById('corr-answer').value = item.answer;
+  document.getElementById('corr-pages').value = item.doc_pages || '';
+  fillDocumentSelect(document.getElementById('corr-doc'), item.doc_name);
+
+  document.getElementById('corr-save').textContent = 'Сохранить изменения #' + item.id;
+  document.getElementById('corr-save').onclick = async () => {
+    const docName = document.getElementById('corr-doc').value;
+    const docPages = document.getElementById('corr-pages').value.trim();
+    if (!docName || !docPages) { msg.textContent = 'Документ и страницы обязательны'; return; }
+    try {
+      await j('/api/admin/corrections/' + item.id, {
+        method: 'PATCH',
+        body: JSON.stringify({
+          question: document.getElementById('corr-question').value.trim(),
+          answer: document.getElementById('corr-answer').value.trim(),
+          doc_name: docName,
+          doc_pages: docPages
+        })
+      });
+      msg.textContent = 'Сохранено';
+      resetCorrectionForm();
+      loadCorrections();
+    } catch (err) { msg.textContent = err.message; }
+  };
+}
+
+function resetCorrectionForm() {
+  const button = document.getElementById('corr-save');
+  button.textContent = 'Сохранить исправление';
+  button.onclick = saveNewCorrection;
+}
+
+async function saveNewCorrection() {
+  const msg = document.getElementById('corr-msg');
+  const docName = document.getElementById('corr-doc').value;
+  const docPages = document.getElementById('corr-pages').value.trim();
+  if (!docName || !docPages) { msg.textContent = 'Документ и страницы обязательны'; return; }
   try {
     await j('/api/admin/corrections', {
       method: 'POST',
       body: JSON.stringify({
         question: document.getElementById('corr-question').value.trim(),
-        answer: document.getElementById('corr-answer').value.trim()
+        answer: document.getElementById('corr-answer').value.trim(),
+        doc_name: docName,
+        doc_pages: docPages
       })
     });
+    msg.textContent = 'Исправление сохранено';
     document.getElementById('corr-answer').value = '';
     loadCorrections();
-  } catch (err) { alert(err.message); }
+  } catch (err) { msg.textContent = err.message; }
+}
+
+let documents = [];
+
+async function loadDocuments() {
+  if (documents.length) return documents;
+  const data = await j('/api/admin/documents');
+  documents = data.items || [];
+  return documents;
+}
+
+async function fillDocumentSelect(select, selected) {
+  const items = await loadDocuments();
+  while (select.firstChild) select.removeChild(select.firstChild);
+  items.forEach(doc => {
+    const option = document.createElement('option');
+    option.value = doc.name;
+    option.textContent = doc.name;
+    select.appendChild(option);
+  });
+  if (selected) select.value = selected;
+}
+
+async function extractPages(docName, pages) {
+  const data = await j('/api/admin/documents/pages', {
+    method: 'POST',
+    body: JSON.stringify({ doc_name: docName, doc_pages: pages })
+  });
+  return data;
+}
+
+document.getElementById('corr-extract').addEventListener('click', async () => {
+  const msg = document.getElementById('corr-msg');
+  const docName = document.getElementById('corr-doc').value;
+  const pages = document.getElementById('corr-pages').value.trim();
+  if (!docName || !pages) { msg.textContent = 'Укажите документ и страницы'; return; }
+  try {
+    const data = await extractPages(docName, pages);
+    const field = document.getElementById('corr-answer');
+    field.value = field.value ? field.value + '\n\n' + data.text : data.text;
+    msg.textContent = 'Текст страниц подставлен: ' + data.doc_ref;
+  } catch (err) { msg.textContent = err.message; }
 });
 
+document.getElementById('corr-save').addEventListener('click', () => saveNewCorrection());
+
 let indexTimer = null;
+let synItems = [];
+
+async function loadSynonyms() {
+  const data = await j('/api/admin/synonyms');
+  synItems = data.items || [];
+  renderSynonyms();
+}
+
+function renderSynonyms() {
+  const query = document.getElementById('syn-search').value.trim().toLowerCase();
+  const rows = query
+    ? synItems.filter(i => i.term.includes(query) || i.synonyms.toLowerCase().includes(query))
+    : synItems;
+  document.getElementById('syn-count').textContent = 'терминов: ' + synItems.length + ', показано: ' + rows.length;
+  const body = document.querySelector('#syn-table tbody');
+  while (body.firstChild) body.removeChild(body.firstChild);
+  rows.forEach(item => {
+    body.appendChild(el('tr', {}, [
+      el('td', { textContent: item.term }),
+      el('td', { textContent: item.synonyms }),
+      el('td', { textContent: item.author || '—' }),
+      el('td', { textContent: item.updated_at }),
+      el('td', {}, [
+        el('button', { textContent: 'Править', onclick: () => editSynonym(item) }),
+        el('button', { className: 'danger', textContent: 'Удалить', onclick: () => removeSynonym(item.term) })
+      ])
+    ]));
+  });
+}
+
+function editSynonym(item) {
+  const body = document.querySelector('#syn-table tbody');
+  const tr = Array.from(body.children).find(
+    row => row.firstChild && row.firstChild.textContent === item.term
+  );
+  if (!tr) return;
+  const cells = tr.children;
+  cells[0].textContent = '';
+  cells[1].textContent = '';
+  const termInput = el('input', { value: item.term });
+  const synInput = el('input', { value: item.synonyms });
+  cells[0].appendChild(termInput);
+  cells[1].appendChild(synInput);
+  const actions = cells[4];
+  while (actions.firstChild) actions.removeChild(actions.firstChild);
+  actions.appendChild(el('button', {
+    className: 'primary',
+    textContent: 'Сохранить',
+    onclick: async () => {
+      const msg = document.getElementById('syn-msg');
+      try {
+        await j('/api/admin/synonyms', {
+          method: 'POST',
+          body: JSON.stringify({
+            term: termInput.value.trim(),
+            synonyms: synInput.value.split(',').map(s => s.trim()).filter(Boolean)
+          })
+        });
+        if (item.term !== termInput.value.trim()) await removeSynonym(item.term, true);
+        msg.textContent = 'Сохранено';
+        await loadSynonyms();
+      } catch (err) { msg.textContent = err.message; }
+    }
+  }));
+  actions.appendChild(el('button', { textContent: 'Отмена', onclick: loadSynonyms }));
+  tr.scrollIntoView({ block: 'center' });
+}
+
+async function removeSynonym(term, quiet) {
+  if (!quiet && !confirm('Удалить термин «' + term + '»?')) return;
+  await j('/api/admin/synonyms/' + encodeURIComponent(term), { method: 'DELETE' });
+  await loadSynonyms();
+}
+
+document.getElementById('syn-search').addEventListener('input', renderSynonyms);
+
+document.getElementById('syn-save').addEventListener('click', async () => {
+  const msg = document.getElementById('syn-msg');
+  try {
+    await j('/api/admin/synonyms', {
+      method: 'POST',
+      body: JSON.stringify({
+        term: document.getElementById('syn-term').value.trim(),
+        synonyms: document.getElementById('syn-list').value.split(',').map(s => s.trim()).filter(Boolean)
+      })
+    });
+    msg.textContent = 'Термин сохранён';
+    document.getElementById('syn-term').value = '';
+    document.getElementById('syn-list').value = '';
+    loadSynonyms();
+  } catch (err) { msg.textContent = err.message; }
+});
+
+document.getElementById('syn-import').addEventListener('click', async () => {
+  const items = {};
+  document.getElementById('syn-bulk').value.split('\n').forEach(line => {
+    const clean = line.trim();
+    if (!clean) return;
+    const parts = clean.split(/\s+[—–-]\s+|[:=]/);
+    if (parts.length < 2) return;
+    items[parts[0].trim().toLowerCase()] = parts[1].split(',').map(s => s.trim()).filter(Boolean);
+  });
+  if (!Object.keys(items).length) { alert('Не удалось разобрать строки. Формат: слово — синонимы'); return; }
+  const res = await j('/api/admin/synonyms/import', { method: 'POST', body: JSON.stringify({ items }) });
+  document.getElementById('syn-bulk').value = '';
+  alert('Терминов в словаре: ' + res.total);
+  loadSynonyms();
+});
+
+document.getElementById('syn-check-btn').addEventListener('click', async () => {
+  const q = document.getElementById('syn-check').value.trim();
+  const out = document.getElementById('syn-check-out');
+  if (!q) { out.textContent = ''; return; }
+  const data = await j('/api/admin/synonyms/expand?q=' + encodeURIComponent(q));
+  out.textContent = data.variants.map((v, i) => (i ? '→ ' : '') + v).join('\n');
+  out.style.whiteSpace = 'pre-wrap';
+});
 
 async function loadIndex() {
   if (indexTimer) clearInterval(indexTimer);

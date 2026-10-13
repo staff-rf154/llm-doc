@@ -39,6 +39,9 @@ CREATE TABLE IF NOT EXISTS requests (
     answer TEXT NOT NULL DEFAULT '',
     grounded INTEGER NOT NULL DEFAULT 0,
     corrected INTEGER NOT NULL DEFAULT 0,
+    doc_name TEXT NOT NULL DEFAULT '',
+    doc_pages TEXT NOT NULL DEFAULT '',
+    doc_ref TEXT NOT NULL DEFAULT '',
     sources INTEGER NOT NULL DEFAULT 0,
     latency_ms INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
@@ -57,6 +60,9 @@ CREATE TABLE IF NOT EXISTS corrections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     question TEXT NOT NULL,
     answer TEXT NOT NULL,
+    doc_name TEXT NOT NULL DEFAULT '',
+    doc_pages TEXT NOT NULL DEFAULT '',
+    doc_ref TEXT NOT NULL DEFAULT '',
     status TEXT NOT NULL DEFAULT 'active',
     author TEXT NOT NULL DEFAULT '',
     created_at TEXT NOT NULL,
@@ -64,6 +70,19 @@ CREATE TABLE IF NOT EXISTS corrections (
 );
 CREATE INDEX IF NOT EXISTS idx_corrections_status ON corrections(status);
 """
+
+CORRECTION_COLUMNS = ("doc_name", "doc_pages", "doc_ref")
+REQUEST_COLUMNS = ("doc_name", "doc_pages", "doc_ref")
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    for table, columns in (("corrections", CORRECTION_COLUMNS), ("requests", REQUEST_COLUMNS)):
+        existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
+        for column in columns:
+            if column not in existing:
+                conn.execute(
+                    f"ALTER TABLE {table} ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"
+                )
 
 SESSION_DAYS = 14
 
@@ -86,6 +105,7 @@ def ensure_schema() -> None:
             return
         with connect() as conn:
             conn.executescript(SCHEMA)
+            _migrate(conn)
         _INIT_DONE = True
 
 
@@ -257,14 +277,17 @@ def log_request(
     corrected: bool,
     sources: int,
     latency_ms: int,
+    reference: dict | None = None,
 ) -> int:
     ensure_schema()
+    reference = reference or {}
     with _LOCK, connect() as conn:
         cur = conn.execute(
             """
             INSERT INTO requests
-                (user_id, username, question, answer, grounded, corrected, sources, latency_ms, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                (user_id, username, question, answer, grounded, corrected,
+                 doc_name, doc_pages, doc_ref, sources, latency_ms, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 (user or {}).get("id"),
@@ -273,6 +296,9 @@ def log_request(
                 answer,
                 1 if grounded else 0,
                 1 if corrected else 0,
+                reference.get("doc_name", ""),
+                reference.get("doc_pages", ""),
+                reference.get("doc_ref", ""),
                 sources,
                 latency_ms,
                 now(),
@@ -291,7 +317,8 @@ def list_requests(
     ensure_schema()
     query = """
         SELECT r.id, r.username, r.user_id, r.question, r.answer, r.grounded,
-               r.corrected, r.sources, r.latency_ms, r.created_at,
+               r.corrected, r.doc_name, r.doc_pages, r.doc_ref,
+               r.sources, r.latency_ms, r.created_at,
                t.vote, t.comment AS rating_comment, t.updated_at AS rated_at
         FROM requests r LEFT JOIN ratings t ON t.request_id = r.id
         WHERE 1 = 1
@@ -348,15 +375,23 @@ def set_rating(request_id: int, vote: str, comment: str = "") -> None:
         )
 
 
-def create_correction(question: str, answer: str, author: str) -> dict:
+def create_correction(
+    question: str,
+    answer: str,
+    author: str,
+    doc_name: str = "",
+    doc_pages: str = "",
+    doc_ref: str = "",
+) -> dict:
     ensure_schema()
     with _LOCK, connect() as conn:
         cur = conn.execute(
             """
-            INSERT INTO corrections (question, answer, status, author, created_at, updated_at)
-            VALUES (?, ?, 'active', ?, ?, ?)
+            INSERT INTO corrections
+                (question, answer, doc_name, doc_pages, doc_ref, status, author, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
             """,
-            (question, answer, author, now(), now()),
+            (question, answer, doc_name, doc_pages, doc_ref, author, now(), now()),
         )
         correction_id = int(cur.lastrowid)
     return get_correction(correction_id) or {}
@@ -389,19 +424,24 @@ def update_correction(
     question: str | None = None,
     answer: str | None = None,
     status: str | None = None,
+    doc_name: str | None = None,
+    doc_pages: str | None = None,
+    doc_ref: str | None = None,
 ) -> None:
     ensure_schema()
     fields = []
     params: list = []
-    if question is not None:
-        fields.append("question = ?")
-        params.append(question)
-    if answer is not None:
-        fields.append("answer = ?")
-        params.append(answer)
-    if status is not None:
-        fields.append("status = ?")
-        params.append(status)
+    for column, value in (
+        ("question", question),
+        ("answer", answer),
+        ("status", status),
+        ("doc_name", doc_name),
+        ("doc_pages", doc_pages),
+        ("doc_ref", doc_ref),
+    ):
+        if value is not None:
+            fields.append(f"{column} = ?")
+            params.append(value)
     if not fields:
         return
     fields.append("updated_at = ?")

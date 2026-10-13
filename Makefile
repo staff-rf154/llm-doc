@@ -1,4 +1,4 @@
-.PHONY: up down build ingest ingest-dry ask evaluate evaluate-ragas logs pull-llm ps clean chm reindex reindex-status reindex-pause reindex-resume seed-prompts prompts
+.PHONY: up down build ingest ingest-dry ask evaluate evaluate-ragas logs pull-llm ps clean chm reindex reindex-status reindex-pause reindex-resume seed-prompts prompts synonyms synonyms-expand seed-synonyms
 
 up:
 	docker compose up -d --build
@@ -45,6 +45,15 @@ seed-prompts:
 
 prompts:
 	curl -s localhost:$${APP_PORT:-8091}/prompts
+
+synonyms:
+	docker compose exec -T app python -c "import synonymdb;[print(i['term'],'->',i['synonyms']) for i in synonymdb.list_terms()]"
+
+synonyms-expand:
+	docker compose exec -T app python -c "import sys,synonymdb;[print('-',v) for v in synonymdb.expand(' '.join(sys.argv[1:]))]" $(Q)
+
+seed-synonyms:
+	docker compose exec -T app python synonyms.py --replace
 
 ask:
 	docker compose run --rm app python -c "import sys,rag; print(rag.ask(' '.join(sys.argv[1:])).text)" $(Q)

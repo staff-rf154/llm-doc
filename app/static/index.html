@@ -80,6 +80,9 @@
   .grounded { color: var(--ok); }
   .ungrounded { color: var(--warn); }
   .corrected { color: var(--accent); }
+  .reference { font-size: 12px; color: var(--muted); margin-top: 4px; }
+  .reference a { color: var(--accent); text-decoration: none; }
+  .reference a:hover { text-decoration: underline; }
   .sources { margin-top: 10px; }
   .sources summary {
     cursor: pointer;
@@ -384,10 +387,13 @@ function addBot() {
   const rate = document.createElement('div');
   rate.className = 'rate';
   rate.hidden = true;
-  el.append(body, status, sources, rate);
+  const reference = document.createElement('div');
+  reference.className = 'reference';
+  reference.hidden = true;
+  el.append(body, status, reference, sources, rate);
   inner.append(el);
   scroll();
-  return { body, cursor, status, sources, rate, suggestions: null, requestId: null };
+  return { body, cursor, status, reference, sources, rate, suggestions: null, requestId: null };
 }
 
 function buildRate(box, requestId) {
@@ -511,6 +517,24 @@ async function ask(question) {
           ui.suggestions = renderSuggestions(event.data || []);
           inner.appendChild(ui.suggestions);
           scroll();
+        } else if (event.type === 'reference') {
+          const ref = event.data || {};
+          if (ref.doc_name) {
+            ui.reference.hidden = false;
+            const label = ref.doc_ref || ref.doc_name;
+            const href = ref.doc_url || '';
+            ui.reference.textContent = 'Документация: ';
+            if (href) {
+              const link = document.createElement('a');
+              link.href = href;
+              link.textContent = label;
+              link.target = '_blank';
+              link.rel = 'noopener';
+              ui.reference.appendChild(link);
+            } else {
+              ui.reference.appendChild(document.createTextNode(label));
+            }
+          }
         } else if (event.type === 'request') {
           ui.requestId = event.data.request_id;
         } else if (event.type === 'sources') {
