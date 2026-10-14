@@ -314,12 +314,22 @@ def log_request(
         return int(cur.lastrowid)
 
 
+SORT_COLUMNS = {
+    "date": "r.id",
+    "vote": "CASE t.vote WHEN 'down' THEN 0 WHEN 'up' THEN 2 ELSE 1 END",
+    "latency": "r.latency_ms",
+    "username": "r.username",
+}
+
+
 def list_requests(
     limit: int = 100,
     offset: int = 0,
     username: str | None = None,
     vote: str | None = None,
     search: str | None = None,
+    sort: str = "date",
+    order: str = "desc",
 ) -> list[dict]:
     ensure_schema()
     query = """
@@ -342,11 +352,18 @@ def list_requests(
     if search:
         query += " AND (r.question LIKE ? OR r.answer LIKE ?)"
         params.extend([f"%{search}%", f"%{search}%"])
-    query += " ORDER BY r.id DESC LIMIT ? OFFSET ?"
+    column = SORT_COLUMNS.get(sort, SORT_COLUMNS["date"])
+    direction = "ASC" if str(order).lower() == "asc" else "DESC"
+    query += f" ORDER BY {column} {direction}, r.id DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
     with connect() as conn:
         rows = conn.execute(query, params).fetchall()
     return [dict(row) for row in rows]
+
+
+def disliked(limit: int = 50) -> list[dict]:
+    """Вопросы с отрицательной оценкой — обязательны к ознакомлению администратором."""
+    return list_requests(limit=limit, vote="down", sort="date", order="desc")
 
 
 def count_requests(vote: str | None = None) -> int:

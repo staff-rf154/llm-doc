@@ -131,12 +131,23 @@ def requests(
     offset: int = 0,
     vote: str | None = None,
     search: str | None = None,
+    sort: str = "date",
+    order: str = "desc",
     user: dict = Depends(auth.require_admin),
 ) -> dict:
     return {
-        "items": appdb.list_requests(limit=limit, offset=offset, vote=vote, search=search),
+        "items": appdb.list_requests(
+            limit=limit, offset=offset, vote=vote, search=search, sort=sort, order=order
+        ),
         "total": appdb.count_requests(vote=vote),
     }
+
+
+@router.get("/disliked")
+def disliked(limit: int = 50, user: dict = Depends(auth.require_admin)) -> dict:
+    """Вопросы с дизлайком — обязательны к ознакомлению администратором."""
+    items = appdb.disliked(limit=limit)
+    return {"items": items, "total": len(items)}
 
 
 @router.get("/stats")

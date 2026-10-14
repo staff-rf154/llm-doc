@@ -90,6 +90,13 @@
   .edit { display: grid; gap: 8px; }
   textarea { min-height: 90px; resize: vertical; }
   .hidden { display: none; }
+  .attention { border-color: var(--bad); }
+  .attention h2 { color: var(--bad); }
+  .attention-item { border-top: 1px solid var(--border); padding: 12px 0; }
+  .attention-item:first-child { border-top: none; }
+  .attention-item .q { font-weight: 600; }
+  .attention-item .a { color: var(--muted); margin: 6px 0; white-space: pre-wrap; }
+  .attention-empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
 </style>
 </head>
 <body>
@@ -109,7 +116,13 @@
 </header>
 
 <main>
-  <section id="tab-overview" class="tab"></section>
+  <section id="tab-overview" class="tab">
+    <div class="card attention" id="attention">
+      <h2>Требует внимания: вопросы с отрицательной оценкой</h2>
+      <div class="muted" id="attention-count"></div>
+      <div id="attention-list"></div>
+    </div>
+  </section>
 
   <section id="tab-users" class="tab hidden">
     <div class="card">
@@ -142,13 +155,20 @@
       <div class="row">
         <h2 style="margin:0">Запросы и оценки</h2>
         <div class="spacer"></div>
-        <select id="req-filter" style="max-width:200px">
+        <select id="req-filter" style="max-width:180px">
           <option value="">Все оценки</option>
           <option value="none">Без оценки</option>
           <option value="down">Дизлайк</option>
           <option value="up">Лайк</option>
         </select>
-        <input id="req-search" placeholder="Поиск по тексту" style="max-width:240px">
+        <select id="req-sort" style="max-width:190px">
+          <option value="date">Сортировка: по дате</option>
+          <option value="vote">Сортировка: по оценке</option>
+          <option value="latency">Сортировка: по времени ответа</option>
+          <option value="username">Сортировка: по пользователю</option>
+        </select>
+        <button id="req-order" title="Сменить направление сортировки">↓ по убыванию</button>
+        <input id="req-search" placeholder="Поиск по тексту" style="max-width:200px">
         <button id="req-reload">Обновить</button>
       </div>
       <div id="req-list"></div>
@@ -245,7 +265,7 @@
 </main>
 
 <script>
-const state = { reqFilter: '', reqSearch: '' };
+const state = { reqFilter: '', reqSearch: '', reqSort: 'date', reqOrder: 'desc' };
 
 function j(url, options) {
   return fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, options || {}))
@@ -293,7 +313,11 @@ async function loadOverview() {
   const data = await j('/api/admin/stats');
   const s = data.summary;
   const root = document.getElementById('tab-overview');
+  const attention = document.getElementById('attention');
   while (root.firstChild) root.removeChild(root.firstChild);
+  root.appendChild(attention);
+
+  await loadAttention();
 
   const stats = el('div', { className: 'card' }, [
     el('h2', { textContent: 'Сводка' }),
@@ -355,6 +379,40 @@ async function loadOverview() {
   t3.appendChild(b3);
   top.appendChild(t3);
   root.appendChild(top);
+}
+
+async function loadAttention() {
+  const data = await j('/api/admin/disliked?limit=50');
+  document.getElementById('attention-count').textContent =
+    'всего вопросов с дизлайком: ' + data.total + '. Ознакомьтесь и исправьте ответ в разделе «Оценки и правки».';
+  const list = document.getElementById('attention-list');
+  while (list.firstChild) list.removeChild(list.firstChild);
+  if (!data.items.length) {
+    list.appendChild(el('div', { className: 'attention-empty', textContent: 'Дизлайков нет.' }));
+    return;
+  }
+  data.items.forEach(item => {
+    list.appendChild(el('div', { className: 'attention-item' }, [
+      el('div', { className: 'q', textContent: item.question }),
+      el('div', {
+        className: 'muted',
+        textContent: item.created_at + ' · ' + (item.username || 'гость') +
+          ' · ответ ' + item.latency_ms + ' мс' +
+          (item.corrected ? ' · исправленный админом' : '') +
+          (item.doc_ref ? ' · ' + item.doc_ref : '')
+      }),
+      el('div', { className: 'a', textContent: item.answer }),
+      item.rating_comment
+        ? el('div', { className: 'muted', textContent: 'Комментарий пользователя: ' + item.rating_comment })
+        : document.createTextNode(''),
+      el('button', { textContent: 'Исправить ответ', onclick: () => openRequestEditor(item) })
+    ]));
+  });
+}
+
+function openRequestEditor(item) {
+  document.querySelector('nav button[data-tab="requests"]').click();
+  loadRequests().then(() => editAnswer(item));
 }
 
 function stat(n, title) {
@@ -438,13 +496,23 @@ document.getElementById('req-filter').addEventListener('change', e => {
   state.reqFilter = e.target.value;
   loadRequests();
 });
+document.getElementById('req-sort').addEventListener('change', e => {
+  state.reqSort = e.target.value;
+  loadRequests();
+});
+document.getElementById('req-order').addEventListener('click', () => {
+  state.reqOrder = state.reqOrder === 'desc' ? 'asc' : 'desc';
+  document.getElementById('req-order').textContent =
+    state.reqOrder === 'desc' ? '↓ по убыванию' : '↑ по возрастанию';
+  loadRequests();
+});
 document.getElementById('req-search').addEventListener('input', e => {
   state.reqSearch = e.target.value;
 });
 document.getElementById('req-reload').addEventListener('click', loadRequests);
 
 async function loadRequests() {
-  const params = new URLSearchParams({ limit: '50' });
+  const params = new URLSearchParams({ limit: '50', sort: state.reqSort, order: state.reqOrder });
   if (state.reqFilter) params.set('vote', state.reqFilter);
   if (state.reqSearch) params.set('search', state.reqSearch);
   const data = await j('/api/admin/requests?' + params.toString());
