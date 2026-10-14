@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
 import time
+from pathlib import Path
 
 import admin
 import appdb
@@ -57,6 +58,18 @@ def app_title() -> str:
         return appdb.get_setting("title", config.APP_TITLE) or config.APP_TITLE
     except Exception:
         return config.APP_TITLE
+
+
+@app.get("/api/images/{filename}")
+def image_file(filename: str):
+    """Изображение из документации, извлечённое при индексации."""
+    from fastapi.responses import FileResponse
+
+    safe = Path(filename).name
+    path = Path(config.IMAGES_DIR) / safe
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail="Изображение не найдено")
+    return FileResponse(path)
 
 
 @app.get("/api/title")

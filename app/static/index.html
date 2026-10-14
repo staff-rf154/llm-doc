@@ -208,6 +208,29 @@
     font-size: 12px;
   }
   #who { font-size: 12px; color: var(--muted); }
+  .images { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
+  .images figure { margin: 0; max-width: 320px; }
+  .images img {
+    width: 100%;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: #fff;
+    cursor: zoom-in;
+  }
+  .images figcaption { font-size: 11px; color: var(--muted); margin-top: 4px; }
+  .images[hidden] { display: none; }
+  #lightbox {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, .85);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 200;
+    padding: 24px;
+  }
+  #lightbox[hidden] { display: none; }
+  #lightbox img { max-width: 100%; max-height: 100%; background: #fff; border-radius: 8px; }
 </style>
 </head>
 <body>
@@ -418,13 +441,16 @@ function addBot() {
   const rate = document.createElement('div');
   rate.className = 'rate';
   rate.hidden = true;
+  const imagesBox = document.createElement('div');
+  imagesBox.className = 'images';
+  imagesBox.hidden = true;
   const reference = document.createElement('div');
   reference.className = 'reference';
   reference.hidden = true;
-  el.append(body, status, reference, sources, rate);
+  el.append(body, status, reference, imagesBox, sources, rate);
   inner.append(el);
   scroll();
-  return { body, cursor, status, reference, sources, rate, suggestions: null, requestId: null };
+  return { body, cursor, status, reference, imagesBox, sources, rate, suggestions: null, requestId: null };
 }
 
 function buildRate(box, requestId) {
@@ -478,6 +504,38 @@ function renderSources(el, sources) {
   while (el.firstChild) el.removeChild(el.firstChild);
   el.appendChild(summary);
   items.forEach(item => el.appendChild(item));
+}
+
+function renderImages(box, items) {
+  box.innerHTML = '';
+  if (!items.length) { box.hidden = true; return; }
+  box.hidden = false;
+  items.forEach(item => {
+    const figure = document.createElement('figure');
+    const img = document.createElement('img');
+    img.src = item.url;
+    img.alt = item.caption || item.source;
+    img.addEventListener('click', () => openLightbox(item));
+    const caption = document.createElement('figcaption');
+    caption.textContent = item.source + ', с. ' + item.page +
+      (item.caption ? ' — ' + item.caption.slice(0, 80) : '');
+    figure.append(img, caption);
+    box.appendChild(figure);
+  });
+}
+
+function openLightbox(item) {
+  let box = document.getElementById('lightbox');
+  if (!box) {
+    box = document.createElement('div');
+    box.id = 'lightbox';
+    const img = document.createElement('img');
+    box.appendChild(img);
+    box.addEventListener('click', () => { box.hidden = true; });
+    document.body.appendChild(box);
+  }
+  box.querySelector('img').src = item.url;
+  box.hidden = false;
 }
 
 function renderSuggestions(items) {
@@ -548,6 +606,8 @@ async function ask(question) {
           ui.suggestions = renderSuggestions(event.data || []);
           inner.appendChild(ui.suggestions);
           scroll();
+        } else if (event.type === 'images') {
+          renderImages(ui.imagesBox, event.data || []);
         } else if (event.type === 'reference') {
           const ref = event.data || {};
           if (ref.doc_name) {

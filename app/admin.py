@@ -9,6 +9,7 @@ import config
 import corrections
 import docpages
 import ingest
+import images
 import ingest
 import settings
 import synonymdb
@@ -439,6 +440,21 @@ def verify_start(user: dict = Depends(auth.require_admin)) -> dict:
 def verify_reset(user: dict = Depends(auth.require_admin)) -> dict:
     appdb.reset_checks()
     return {"ok": True, "summary": appdb.check_summary()}
+
+
+@router.get("/images")
+def images_status(user: dict = Depends(auth.require_admin)) -> dict:
+    status = images.job.snapshot()
+    client = vs.get_qdrant()
+    status["exists"] = client.collection_exists(images.collection_name())
+    if status["exists"]:
+        status["indexed"] = len(images.indexed_points())
+    return status
+
+
+@router.post("/images/start", status_code=202)
+def images_start(user: dict = Depends(auth.require_admin)) -> dict:
+    return images.job.start()
 
 
 @router.get("/index")

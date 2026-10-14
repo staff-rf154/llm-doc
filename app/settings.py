@@ -77,6 +77,18 @@ PARAMS: list[Param] = [
           hint="Сколько файлов обрабатывается одновременно"),
     Param("INGEST_BATCH_SIZE", "Точек в одном upsert", "int", group=INGEST),
     Param("INGEST_CHECKPOINT_EVERY", "Чанков между срезами", "int", group=INGEST),
+    Param("IMAGE_SEARCH_ENABLED", "Искать изображения в ответах", "bool", group=BEHAVIOUR,
+          hint="Прикладывать найденные иллюстрации из документации к ответу"),
+    Param("IMAGE_MATCH_THRESHOLD", "Порог релевантности изображения", "float", group=BEHAVIOUR,
+          hint="Ниже порога картинка не показывается. Для e5 обычно 0.7–0.8"),
+    Param("IMAGE_MAX", "Максимум изображений в ответе", "int", group=BEHAVIOUR),
+    Param("IMAGE_MIN_SIDE", "Минимальный размер изображения, px", "int", group=INGEST,
+          hint="Мелкие иконки, тайлы и разделители отбрасываются"),
+    Param("IMAGE_PER_PAGE", "Изображений с одной страницы", "int", group=INGEST),
+    Param("IMAGE_PER_DOC", "Изображений в документе", "int", group=INGEST,
+          hint="Берутся самые крупные изображения документа"),
+    Param("IMAGE_SKIP_FULLPAGE", "Доля площади страницы для фоновых картинок", "float", group=INGEST,
+          hint="Картинки крупнее этой доли страницы считаются фоном и пропускаются"),
 ]
 
 CACHE_TTL = 3.0

@@ -9,5 +9,6 @@ data/extracted/
 data/app/
 data/index_state/
 data/synonyms/
+data/images/
 data/prompts/
 data/eval/report.json

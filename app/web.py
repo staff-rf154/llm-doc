@@ -34,6 +34,17 @@ def _history(messages: list[Turn]) -> list[dict]:
     return turns
 
 
+def _related_images(question: str) -> list[dict]:
+    if not settings.bool_value("IMAGE_SEARCH_ENABLED", True):
+        return []
+    try:
+        import images
+
+        return images.search(question)
+    except Exception:
+        return []
+
+
 def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
     question = req.messages[-1].content
     started = time.time()
@@ -47,8 +58,11 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
             {"type": "sources", "data": []},
             {"type": "request", "data": {"request_id": request_id}},
             {"type": "meta", "data": {"grounded": True, "corrected": False}},
-            {"type": "done", "data": ""},
         ]
+        found = _related_images(question)
+        if found:
+            payload.append({"type": "images", "data": found})
+        payload.append({"type": "done", "data": ""})
         return StreamingResponse(
             _sse(payload),
             media_type="text/event-stream",
@@ -148,6 +162,9 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
         yield _sse_event(
             {"type": "meta", "data": {"grounded": grounded, "corrected": False}}
         )
+        found = _related_images(question)
+        if found:
+            yield _sse_event({"type": "images", "data": found})
         yield _sse_event({"type": "done", "data": ""})
 
     return StreamingResponse(generate(), media_type="text/event-stream")

@@ -58,6 +58,15 @@ services:
       - CORRECTION_MATCH_THRESHOLD=${CORRECTION_MATCH_THRESHOLD:-0.86}
       - CORRECTION_EXAMPLES=${CORRECTION_EXAMPLES:-2}
       - SYNONYMS_MAX_VARIANTS=${SYNONYMS_MAX_VARIANTS:-6}
+      - IMAGES_DIR=/data/images
+      - IMAGES_COLLECTION=${IMAGES_COLLECTION:-images}
+      - IMAGE_SEARCH_ENABLED=${IMAGE_SEARCH_ENABLED:-1}
+      - IMAGE_MATCH_THRESHOLD=${IMAGE_MATCH_THRESHOLD:-0.75}
+      - IMAGE_MAX=${IMAGE_MAX:-2}
+      - IMAGE_MIN_SIDE=${IMAGE_MIN_SIDE:-200}
+      - IMAGE_PER_PAGE=${IMAGE_PER_PAGE:-1}
+      - IMAGE_PER_DOC=${IMAGE_PER_DOC:-20}
+      - IMAGE_SKIP_FULLPAGE=${IMAGE_SKIP_FULLPAGE:-0.6}
       - PROMPTS_MAX=${PROMPTS_MAX:-8}
       - INGEST_WORKERS=${INGEST_WORKERS:-8}
       - INGEST_BATCH_SIZE=${INGEST_BATCH_SIZE:-64}
@@ -73,6 +82,7 @@ services:
       - ./data/index_state:/data/index_state
       - ./data/app:/data/app
       - ./data/synonyms:/data/synonyms
+      - ./data/images:/data/images
       - ./app/.cache:/app/.cache
     ports:
       - "${APP_PORT}:8000"

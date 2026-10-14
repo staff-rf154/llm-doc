@@ -259,6 +259,18 @@
         <span class="muted" id="set-params-msg"></span>
       </div>
     </div>
+  <div class="card" style="margin-top:16px">
+      <h2>Изображения из документации</h2>
+      <div class="row">
+        <button id="img-start">Извлечь изображения из PDF</button>
+        <span class="muted" id="img-state">—</span>
+      </div>
+      <div class="muted">
+        Встроенные иллюстрации извлекаются из PDF, подписываются текстом страницы
+        и ищутся по вопросу так же, как текст. В ответе показываются картинки
+        с релевантностью выше порога.
+      </div>
+    </div>
   </section>
 
   <section id="tab-index" class="tab hidden">
@@ -313,7 +325,7 @@ function loadTab(tab) {
   if (tab === 'requests') loadRequests();
   if (tab === 'corrections') loadCorrections();
   if (tab === 'synonyms') loadSynonyms();
-  if (tab === 'settings') loadSettings();
+  if (tab === 'settings') { loadSettings(); loadImages(); }
   if (tab === 'index') loadIndex();
 }
 
@@ -572,6 +584,33 @@ function editAnswer(item) {
   box.insertBefore(wrap, box.firstChild);
   wrap.scrollIntoView({ block: 'start' });
 }
+
+let imageTimer = null;
+
+async function loadImages() {
+  const data = await j('/api/admin/images');
+  let line = data.exists
+    ? 'в индексе изображений: ' + (data.indexed || 0)
+    : 'изображения ещё не извлекались';
+  if (data.status === 'running') {
+    line += ' | идёт извлечение: ' + data.done + '/' + data.total + ' файлов';
+  } else if (data.status === 'done') {
+    line += ' | последний запуск: ' + data.images + ' изображений из ' + data.files + ' файлов';
+  } else if (data.status === 'error') {
+    line += ' | ошибка: ' + data.error;
+  }
+  document.getElementById('img-state').textContent = line;
+  if (data.status === 'running') {
+    if (imageTimer) clearTimeout(imageTimer);
+    imageTimer = setTimeout(loadImages, 3000);
+  }
+}
+
+document.getElementById('img-start').addEventListener('click', async () => {
+  document.getElementById('img-state').textContent = 'запуск…';
+  await j('/api/admin/images/start', { method: 'POST' });
+  loadImages();
+});
 
 let verifyTimer = null;
 
