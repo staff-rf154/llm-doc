@@ -478,10 +478,9 @@ function editAnswer(item) {
 
   fillDocumentSelect(docSelect, item.doc_name || '').then(() => {
     pages.value = item.doc_pages || '';
-    if (item.doc_ref) {
-      note.textContent = 'Текущая ссылка: ' + item.doc_ref;
-      pages.value = pages.value || item.doc_pages || '';
-    }
+    note.textContent = item.doc_ref
+      ? 'Текущая ссылка: ' + item.doc_ref
+      : 'Укажите документ и страницы — они обязательны при правке ответа';
   });
 
   extractBtn.addEventListener('click', async () => {
@@ -501,29 +500,16 @@ function editAnswer(item) {
       return;
     }
     try {
-      const correctionId = prompt('ID исправления из раздела «Исправления» (пусто — создать новое)', '');
-      if (correctionId) {
-        await j('/api/admin/corrections/' + correctionId, {
-          method: 'PATCH',
-          body: JSON.stringify({
-            question: question.value,
-            answer: answer.value,
-            doc_name: docName,
-            doc_pages: docPages
-          })
-        });
-      } else {
-        await j('/api/admin/corrections', {
-          method: 'POST',
-          body: JSON.stringify({
-            question: question.value,
-            answer: answer.value,
-            doc_name: docName,
-            doc_pages: docPages
-          })
-        });
-      }
-      note.textContent = 'Сохранено';
+      const saved = await j('/api/admin/corrections/by-question', {
+        method: 'POST',
+        body: JSON.stringify({
+          question: question.value,
+          answer: answer.value,
+          doc_name: docName,
+          doc_pages: docPages
+        })
+      });
+      note.textContent = 'Сохранено как исправление #' + saved.id + ' (' + saved.doc_ref + ')';
       loadCorrections();
     } catch (err) { note.textContent = err.message; }
   });

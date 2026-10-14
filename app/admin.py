@@ -314,6 +314,31 @@ def expand_synonyms(q: str, user: dict = Depends(auth.require_admin)) -> dict:
     }
 
 
+@router.post("/corrections/by-question")
+def upsert_correction_by_question(
+    payload: CorrectionCreate,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    """Обновить исправление с таким же вопросом или создать новое."""
+    existing = None
+    for item in appdb.list_corrections():
+        if item["question"].strip().lower() == payload.question.strip().lower():
+            existing = item
+            break
+    if existing:
+        return update_correction(
+            existing["id"],
+            CorrectionUpdate(
+                question=payload.question,
+                answer=payload.answer,
+                doc_name=payload.doc_name,
+                doc_pages=payload.doc_pages,
+            ),
+            user,
+        )
+    return create_correction(payload, user)
+
+
 @router.get("/index")
 def index_status(user: dict = Depends(auth.require_admin)) -> dict:
     status = ingest.job.snapshot()
