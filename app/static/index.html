@@ -206,6 +206,7 @@
   .rate { display: flex; gap: 6px; align-items: center; margin-top: 8px; }
   .rate button { padding: 4px 10px; font-size: 12px; }
   .rate button.active { border-color: var(--accent); color: var(--accent); }
+  .rate .muted { width: 100%; margin-top: 4px; }
   .rate input {
     flex: 1;
     background: var(--panel-2);
@@ -489,22 +490,50 @@ function buildRate(box, requestId) {
   sendComment.textContent = 'Отправить';
 
   let vote = null;
+  let saved = false;
+
+  async function send() {
+    const res = await fetch('/api/rate/' + requestId, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ vote, comment: comment.value })
+    });
+    if (!res.ok) return false;
+    const data = await res.json().catch(() => ({}));
+    saved = true;
+    comment.disabled = true;
+    comment.value = '';
+    sendComment.disabled = true;
+    sendComment.textContent = 'Отправлено';
+    up.disabled = true;
+    down.disabled = true;
+    if (data.excluded && data.excluded.length) {
+      note.textContent = 'Исключено из ответов: ' + data.excluded.join(', ');
+    }
+    return true;
+  }
+
   async function save(nextVote) {
     vote = vote === nextVote ? null : nextVote;
     up.classList.toggle('active', vote === 'up');
     down.classList.toggle('active', vote === 'down');
     if (!vote) return;
-    await fetch('/api/rate/' + requestId, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ vote, comment: comment.value })
-    });
+    send();
   }
 
-  up.addEventListener('click', () => save('up'));
-  down.addEventListener('click', () => save('down'));
-  sendComment.addEventListener('click', () => { if (vote) save(vote); });
-  box.append(up, down, comment, sendComment);
+  const note = document.createElement('div');
+  note.className = 'muted';
+
+  up.addEventListener('click', () => { if (!saved) save('up'); });
+  down.addEventListener('click', () => { if (!saved) save('down'); });
+  sendComment.addEventListener('click', () => {
+    if (!vote) {
+      note.textContent = 'Сначала поставьте оценку: 👍 или 👎';
+      return;
+    }
+    send();
+  });
+  box.append(up, down, comment, sendComment, note);
 }
 
 function renderSources(el, sources) {
