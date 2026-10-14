@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from openai import OpenAI
 
 import config
+import settings
 import vectorstore as vs
 from capabilities import is_capabilities_question, render as render_capabilities
 
@@ -55,13 +56,13 @@ def query_variants(query: str) -> list[str]:
     try:
         import synonymdb
 
-        return synonymdb.expand(query, max_variants=config.SYNONYMS_MAX_VARIANTS)
+        return synonymdb.expand(query, max_variants=settings.int_value("SYNONYMS_MAX_VARIANTS"))
     except Exception:
         return [query]
 
 
 def retrieve(query: str, top_k: int | None = None) -> list[RetrievedChunk]:
-    top_k = top_k or config.RETRIEVE_TOP_K
+    top_k = top_k or settings.int_value("RETRIEVE_TOP_K")
     client = vs.get_qdrant()
     target = vs.target_name()
     if not client.collection_exists(target):
@@ -112,7 +113,11 @@ def build_prompt(
 
 
 def get_client() -> OpenAI:
-    return OpenAI(base_url=config.LLM_BASE_URL, api_key=config.LLM_API_KEY, timeout=180)
+    return OpenAI(
+        base_url=settings.value("LLM_BASE_URL", config.LLM_BASE_URL),
+        api_key=settings.value("LLM_API_KEY", config.LLM_API_KEY),
+        timeout=180,
+    )
 
 
 EMPTY_INDEX_MESSAGE = "Индекс документации пуст."
@@ -187,15 +192,15 @@ def ask(question: str, top_k: int | None = None) -> Answer:
 
     client = get_client()
     completion = client.chat.completions.create(
-        model=config.LLM_MODEL,
+        model=settings.value("LLM_MODEL", config.LLM_MODEL),
         messages=[
-            {"role": "system", "content": config.SYSTEM_PROMPT},
+            {"role": "system", "content": settings.value("SYSTEM_PROMPT", config.SYSTEM_PROMPT)},
             {
                 "role": "user",
                 "content": build_prompt(question, chunks, correction_examples(question)),
             },
         ],
-        temperature=0.1,
+        temperature=settings.float_value("LLM_TEMPERATURE"),
     )
     text = (completion.choices[0].message.content or "").strip()
     grounded = NO_ANSWER_MARKER not in text.lower()

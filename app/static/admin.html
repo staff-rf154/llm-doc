@@ -247,6 +247,18 @@
       </div>
       <div class="muted" id="set-default"></div>
     </div>
+    <div class="card">
+      <h2>Параметры модели и пайплайна</h2>
+      <div class="muted" style="margin-bottom:12px">
+        Значения переопределяют переменные из .env. Помеченные «требует переиндексации»
+        начнут действовать после следующей индексации.
+      </div>
+      <div id="set-params"></div>
+      <div class="row">
+        <button class="primary" id="set-params-save">Сохранить параметры</button>
+        <span class="muted" id="set-params-msg"></span>
+      </div>
+    </div>
   </section>
 
   <section id="tab-index" class="tab hidden">
@@ -763,7 +775,97 @@ async function loadSettings() {
   document.getElementById('set-default').textContent =
     'Значение по умолчанию из переменной APP_TITLE в .env: ' + data.default_title;
   document.getElementById('set-msg').textContent = '';
+  settingsModels = data.llm_models || [];
+  renderParams(data.items || [], data.groups || []);
 }
+
+let settingsModels = [];
+
+function renderParams(items, groups) {
+  const box = document.getElementById('set-params');
+  while (box.firstChild) box.removeChild(box.firstChild);
+  groups.forEach(group => {
+    const groupBox = el('div', { className: 'card', style: 'background:var(--panel-2)' }, [
+      el('h2', { textContent: group })
+    ]);
+    items.filter(item => item.group === group).forEach(item => {
+      groupBox.appendChild(paramRow(item));
+    });
+    box.appendChild(groupBox);
+  });
+}
+
+function paramRow(item) {
+  const inputId = 'param-' + item.key;
+  let input;
+  if (item.key === 'LLM_MODEL' && settingsModels.length) {
+    input = el('select', { id: inputId });
+    settingsModels.forEach(name => {
+      const option = document.createElement('option');
+      option.value = name;
+      option.textContent = name;
+      input.appendChild(option);
+    });
+    if (item.value) input.value = item.value;
+    if (item.value && settingsModels.indexOf(item.value) === -1) {
+      const option = document.createElement('option');
+      option.value = item.value;
+      option.textContent = item.value + ' (нет на сервере)';
+      input.appendChild(option);
+      input.value = item.value;
+    }
+  } else if (item.type === 'prompt') {
+    input = el('textarea', { id: inputId, style: 'min-height:150px' });
+    input.value = item.value;
+  } else {
+    input = el('input', { id: inputId });
+    input.value = item.value;
+    if (item.type === 'float') input.setAttribute('step', '0.05');
+    if (item.type === 'int') input.setAttribute('type', 'number');
+  }
+
+  const label = el('label', {
+    for: inputId,
+    style: 'min-width:260px;font-weight:500'
+  }, [
+    document.createTextNode(item.label),
+    item.requires_reindex ? el('span', { className: 'pill down', textContent: 'требует переиндексации' }) : document.createTextNode(''),
+    item.overridden ? el('span', { className: 'pill', textContent: 'из кабинета' }) : document.createTextNode('')
+  ]);
+
+  const hint = el('div', { className: 'muted' }, [
+    document.createTextNode((item.hint ? item.hint + ' · ' : '') + 'по умолчанию: ' + item.default)
+  ]);
+
+  const reset = el('button', {
+    textContent: 'Сбросить',
+    onclick: async () => {
+      await j('/api/admin/settings/params/' + encodeURIComponent(item.key) + '/reset', { method: 'POST' });
+      loadSettings();
+    }
+  });
+
+  return el('div', { className: 'row', style: 'align-items:flex-start' }, [
+    el('div', { style: 'min-width:260px' }, [label, hint]),
+    el('div', { style: 'flex:1;min-width:220px' }, [input]),
+    el('div', {}, [reset])
+  ]);
+}
+
+document.getElementById('set-params-save').addEventListener('click', async () => {
+  const msg = document.getElementById('set-params-msg');
+  const values = {};
+  document.querySelectorAll('#set-params [id^="param-"]').forEach(node => {
+    values[node.id.replace('param-', '')] = node.value;
+  });
+  try {
+    const res = await j('/api/admin/settings/params', { method: 'PATCH', body: JSON.stringify({ values }) });
+    msg.textContent = res.requires_reindex && res.requires_reindex.length
+      ? 'Сохранено. ' + res.detail
+      : 'Сохранено';
+    loadSettings();
+  } catch (err) { msg.textContent = err.message; }
+});
 
 document.getElementById('set-save').addEventListener('click', async () => {
   const msg = document.getElementById('set-msg');

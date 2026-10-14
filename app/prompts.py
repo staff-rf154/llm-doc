@@ -8,6 +8,7 @@ from pathlib import Path
 
 import config
 import promptdb
+import settings
 import vectorstore as vs
 
 SITE = "https://example.org/"
@@ -121,10 +122,11 @@ def build_prompts() -> list[dict]:
             unconditional.append(row)
         elif any(k in haystack for k in keywords):
             matched.append(row)
-    selected = (matched + unconditional or rows)[: config.PROMPTS_MAX]
+    limit = settings.int_value("PROMPTS_MAX")
+    selected = (matched + unconditional or rows)[:limit]
     return [
         {"text": r["text"], "product": r["product"], "source_url": r["source_url"]}
-        for r in selected[: config.PROMPTS_MAX]
+        for r in selected[:limit]
     ]
 
 

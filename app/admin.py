@@ -9,6 +9,8 @@ import config
 import corrections
 import docpages
 import ingest
+import ingest
+import settings
 import synonymdb
 import vectorstore as vs
 import verify
@@ -62,6 +64,9 @@ def get_settings(user: dict = Depends(auth.require_admin)) -> dict:
     return {
         "title": appdb.get_setting("title", config.APP_TITLE) or config.APP_TITLE,
         "default_title": config.APP_TITLE,
+        "groups": settings.groups(),
+        "items": settings.describe(),
+        "llm_models": _available_llm_models(),
     }
 
 
@@ -72,6 +77,59 @@ def update_settings(
 ) -> dict:
     appdb.set_setting("title", payload.title.strip())
     return {"title": appdb.get_setting("title", config.APP_TITLE)}
+
+
+class ParamsUpdate(BaseModel):
+    values: dict[str, str]
+
+
+@router.patch("/settings/params")
+def update_params(
+    payload: ParamsUpdate,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    try:
+        reindex = settings.save(payload.values)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "ok": True,
+        "items": settings.describe(),
+        "requires_reindex": reindex,
+        "detail": (
+            "Изменения с применены, но требуют переиндексации: " + ", ".join(reindex)
+            if reindex
+            else ""
+        ),
+    }
+
+
+@router.post("/settings/params/{key}/reset")
+def reset_param(key: str, user: dict = Depends(auth.require_admin)) -> dict:
+    if key not in {param.key for param in settings.PARAMS}:
+        raise HTTPException(status_code=404, detail="Неизвестный параметр")
+    settings.reset(key)
+    return {"ok": True, "items": settings.describe()}
+
+
+def _available_llm_models() -> list[str]:
+    """Модели, доступные у текущего LLM-сервера."""
+    try:
+        from openai import OpenAI
+
+        client = OpenAI(
+            base_url=settings.value("LLM_BASE_URL", config.LLM_BASE_URL),
+            api_key=settings.value("LLM_API_KEY", config.LLM_API_KEY) or "none",
+            timeout=5,
+        )
+        models = client.models.list()
+        names = sorted({getattr(item, "id", "") for item in models.data if getattr(item, "id", "")})
+        if names:
+            return names
+    except Exception:
+        pass
+    current = settings.value("LLM_MODEL", config.LLM_MODEL)
+    return [current] if current else []
 
 
 class RatingFilter(BaseModel):
@@ -336,7 +394,7 @@ def delete_synonym(term: str, user: dict = Depends(auth.require_admin)) -> dict:
 def expand_synonyms(q: str, user: dict = Depends(auth.require_admin)) -> dict:
     return {
         "query": q,
-        "variants": synonymdb.expand(q, max_variants=config.SYNONYMS_MAX_VARIANTS),
+        "variants": synonymdb.expand(q, max_variants=settings.int_value("SYNONYMS_MAX_VARIANTS")),
     }
 
 

@@ -10,6 +10,7 @@ import appdb
 import auth
 import config
 import rag
+import settings
 from capabilities import is_capabilities_question, render as render_capabilities, suggestions
 
 router = APIRouter()
@@ -26,7 +27,7 @@ class ChatRequest(BaseModel):
 
 
 def _history(messages: list[Turn]) -> list[dict]:
-    turns = [{"role": "system", "content": config.SYSTEM_PROMPT}]
+    turns = [{"role": "system", "content": settings.value("SYSTEM_PROMPT", config.SYSTEM_PROMPT)}]
     for turn in messages[:-1]:
         turns.append({"role": turn.role, "content": turn.content})
     turns.append({"role": "user", "content": messages[-1].content})
@@ -101,9 +102,9 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
         answer_parts: list[str] = []
         try:
             stream = client.chat.completions.create(
-                model=config.LLM_MODEL,
+                model=settings.value("LLM_MODEL", config.LLM_MODEL),
                 messages=_history(req.messages)[:-1] + [{"role": "user", "content": prompt}],
-                temperature=0.2,
+                temperature=settings.float_value("LLM_TEMPERATURE"),
                 stream=True,
             )
             for event in stream:

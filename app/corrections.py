@@ -4,6 +4,7 @@ from qdrant_client.http import models
 
 import appdb
 import config
+import settings
 import vectorstore as vs
 
 
@@ -124,13 +125,13 @@ def search(question: str, limit: int = 3) -> list[dict]:
 
 def match(question: str) -> tuple[dict | None, list[dict]]:
     """Точное исправление (порог схожести) и примеры для подсказки модели."""
-    found = search(question, limit=max(1, config.CORRECTION_EXAMPLES + 1))
+    found = search(question, limit=max(1, settings.int_value("CORRECTION_EXAMPLES") + 1))
     exact = None
     examples: list[dict] = []
     for item in found:
-        if exact is None and item["score"] >= config.CORRECTION_MATCH_THRESHOLD:
+        if exact is None and item["score"] >= settings.float_value("CORRECTION_MATCH_THRESHOLD"):
             exact = item
             continue
-        if len(examples) < config.CORRECTION_EXAMPLES:
+        if len(examples) < settings.int_value("CORRECTION_EXAMPLES"):
             examples.append(item)
     return exact, examples

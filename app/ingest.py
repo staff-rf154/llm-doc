@@ -11,14 +11,15 @@ from qdrant_client.http import models
 
 import config
 import index_state
+import settings
 import vectorstore as vs
 from loaders import iter_documents, load_file
 
 
 def split_text(text: str) -> list[str]:
     splitter = RecursiveCharacterTextSplitter(
-        chunk_size=config.CHUNK_SIZE,
-        chunk_overlap=config.CHUNK_OVERLAP,
+        chunk_size=settings.int_value("CHUNK_SIZE"),
+        chunk_overlap=settings.int_value("CHUNK_OVERLAP"),
         separators=["\n\n", "\n", ". ", " ", ""],
         keep_separator=True,
     )
@@ -238,7 +239,7 @@ def reindex(
     client = vs.get_qdrant()
     already: dict[str, set[int]] = vs.loaded_chunks(collection)
     files = plan_files()
-    workers = max(1, config.INGEST_WORKERS)
+    workers = max(1, settings.int_value("INGEST_WORKERS"))
     counters = {"done": 0, "total": 0, "skipped": 0}
     counter_lock = threading.Lock()
     failed: list[dict] = []
@@ -290,13 +291,13 @@ def reindex(
                 return
 
             since_snapshot = 0
-            for batch in iter_batches(points[start_at:], config.INGEST_BATCH_SIZE):
+            for batch in iter_batches(points[start_at:], settings.int_value("INGEST_BATCH_SIZE")):
                 gate.wait()
                 upsert_batch(client, collection, batch)
                 start_at += len(batch)
                 bump("done", len(batch))
                 since_snapshot += len(batch)
-                if since_snapshot >= config.INGEST_CHECKPOINT_EVERY:
+                if since_snapshot >= settings.int_value("INGEST_CHECKPOINT_EVERY"):
                     index_state.save_file_progress(
                         collection,
                         source_key,

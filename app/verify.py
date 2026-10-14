@@ -12,6 +12,7 @@ import appdb
 import config
 import docpages
 import rag
+import settings
 import vectorstore as vs
 
 VERIFY_PROMPT = (
@@ -82,7 +83,7 @@ def verify_one(correction: dict) -> dict:
         "Верни вердикт."
     )
     completion = client.chat.completions.create(
-        model=config.LLM_MODEL,
+        model=settings.value("LLM_MODEL", config.LLM_MODEL),
         messages=[
             {"role": "system", "content": JUDGE_SYSTEM},
             {"role": "user", "content": prompt},

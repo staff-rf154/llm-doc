@@ -12,6 +12,7 @@ import ingest
 import promptdb
 import prompts
 import rag
+import settings
 import synonymdb
 import vectorstore
 import web
@@ -102,7 +103,7 @@ def health() -> dict:
         "status": "ok",
         "collection": config.QDRANT_COLLECTION,
         "title": app_title(),
-        "llm_model": config.LLM_MODEL,
+        "llm_model": settings.value("LLM_MODEL", config.LLM_MODEL),
         "embedding_model": config.EMBEDDING_MODEL,
     }
 
