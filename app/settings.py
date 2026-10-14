@@ -118,7 +118,13 @@ def value(key: str, default: str = "") -> str:
     stored = raw(key)
     if stored:
         return stored
-    return default
+    if default:
+        return default
+    if key == "SYSTEM_PROMPT":
+        return config.SYSTEM_PROMPT
+    if hasattr(config, key):
+        return str(getattr(config, key))
+    return ""
 
 
 def int_value(key: str) -> int:
