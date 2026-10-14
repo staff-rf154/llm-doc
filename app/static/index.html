@@ -33,6 +33,10 @@
     align-items: center;
     gap: 14px;
     background: var(--panel);
+    flex: 0 0 auto;
+    position: sticky;
+    top: 0;
+    z-index: 10;
   }
   header h1 { font-size: 16px; margin: 0; font-weight: 600; }
   .badge {
@@ -202,10 +206,10 @@
   <span class="badge" id="model">—</span>
   <span class="badge" id="index">—</span>
   <div class="spacer"></div>
-  <span id="who"></span>
+  <span id="who">гость</span>
   <button id="admin-link" hidden>Админ</button>
-  <button id="logout" hidden>Выйти</button>
-  <button id="clear" hidden>Очистить</button>
+  <button id="logout">Выйти</button>
+  <button id="clear">Очистить</button>
 </header>
 
 <div id="auth">
@@ -260,8 +264,6 @@ async function api(path, options) {
 function showLogin() {
   authEl.hidden = false;
   appEl.hidden = true;
-  document.getElementById('logout').hidden = true;
-  document.getElementById('clear').hidden = true;
   document.getElementById('admin-link').hidden = true;
   document.getElementById('who').textContent = 'гость';
 }
@@ -270,8 +272,6 @@ function showApp(user) {
   me = user;
   authEl.hidden = true;
   appEl.hidden = false;
-  document.getElementById('logout').hidden = false;
-  document.getElementById('clear').hidden = false;
   document.getElementById('admin-link').hidden = user.role !== 'admin';
   document.getElementById('who').textContent =
     user.username + (user.role === 'admin' ? ' · админ' : '');
