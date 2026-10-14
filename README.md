@@ -166,7 +166,10 @@ curl -s -b cookie.txt -X POST localhost:8091/api/logout
 
 Там же, ниже, — параметры модели и пайплайна. Любой из них можно переопределить
 из кабинета: значение попадает в таблицу `settings` и применяется сразу, а кнопка
-«Сбросить» возвращает значение из `.env`.
+«Сбросить» возвращает значение из `.env`. Все 17 параметров присутствуют в `.env`
+(с группировкой и комментариями) и проброшены в контейнер: `docker-compose.yml`
+подключает `.env` через `env_file`, поэтому многострочный `SYSTEM_PROMPT` тоже
+передаётся без обрезаний.
 
 | Группа | Параметры |
 |--------|-----------|
@@ -655,6 +658,8 @@ make evaluate-ragas  # дополнительно faithfulness, answer_relevancy
 | `LLM_BASE_URL` | `http://ollama:11434/v1` | OpenAI-совместимый endpoint |
 | `LLM_API_KEY` | `ollama` | ключ LLM |
 | `LLM_MODEL` | `qwen2.5:3b-instruct` | модель генерации |
+| `LLM_TEMPERATURE` | `0.1` | температура генерации |
+| `LLM_MAX_TOKENS` | `0` | лимит токенов в ответе, 0 — без лимита |
 | `EMBEDDING_MODEL` | `intfloat/multilingual-e5-base` | модель эмбеддингов |
 | `DOCS_DIR` | `/data/docs` | исходные документы (ro) |
 | `EXTRACTED_DIR` | `/data/extracted` | распакованный CHM/текст |
