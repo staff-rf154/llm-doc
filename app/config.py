@@ -24,6 +24,7 @@ EMBED_DIM = 768
 PROMPTS_CACHE_TTL = int(os.getenv("PROMPTS_CACHE_TTL", "300"))
 INDEX_STATE_DB = os.getenv("INDEX_STATE_DB", "/data/index_state/index.db")
 APP_DB = os.getenv("APP_DB", "/data/app/app.db")
+APP_TITLE = os.getenv("APP_TITLE", "База знаний company")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 SESSION_COOKIE = os.getenv("SESSION_COOKIE", "sid")

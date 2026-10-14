@@ -50,6 +50,19 @@ class LoginRequest(BaseModel):
     password: str = Field(min_length=1)
 
 
+def app_title() -> str:
+    """Название базы знаний: значение из настроек, иначе из APP_TITLE."""
+    try:
+        return appdb.get_setting("title", config.APP_TITLE) or config.APP_TITLE
+    except Exception:
+        return config.APP_TITLE
+
+
+@app.get("/api/title")
+def title() -> dict:
+    return {"title": app_title()}
+
+
 @app.post("/api/login")
 def login(payload: LoginRequest, response: Response) -> dict:
     token = appdb.login(payload.username, payload.password)
@@ -88,6 +101,7 @@ def health() -> dict:
     return {
         "status": "ok",
         "collection": config.QDRANT_COLLECTION,
+        "title": app_title(),
         "llm_model": config.LLM_MODEL,
         "embedding_model": config.EMBEDDING_MODEL,
     }

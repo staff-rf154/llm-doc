@@ -49,6 +49,7 @@ services:
       APP_DB: /data/app/app.db
       ADMIN_USERNAME: ${ADMIN_USERNAME:-}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
+      APP_TITLE: ${APP_TITLE:-База знаний company}
     volumes:
       - ./data/docs:/data/docs:ro
       - ./data/extracted:/data/extracted

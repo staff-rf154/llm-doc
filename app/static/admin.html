@@ -101,6 +101,7 @@
     <button data-tab="requests">Оценки и правки</button>
     <button data-tab="corrections">Исправления</button>
     <button data-tab="synonyms">Синонимы</button>
+    <button data-tab="settings">Настройки</button>
     <button data-tab="index">Индексация</button>
   </nav>
   <div class="spacer"></div>
@@ -235,6 +236,19 @@
     </div>
   </section>
 
+  <section id="tab-settings" class="tab hidden">
+    <div class="card">
+      <h2>Оформление</h2>
+      <div class="row">
+        <input id="set-title" placeholder="Название базы знаний" style="max-width:420px">
+        <button class="primary" id="set-save">Сохранить</button>
+        <button id="set-reset">Вернуть значение из .env</button>
+        <span class="muted" id="set-msg"></span>
+      </div>
+      <div class="muted" id="set-default"></div>
+    </div>
+  </section>
+
   <section id="tab-index" class="tab hidden">
     <div class="card">
       <h2>Индексация документации</h2>
@@ -287,6 +301,7 @@ function loadTab(tab) {
   if (tab === 'requests') loadRequests();
   if (tab === 'corrections') loadCorrections();
   if (tab === 'synonyms') loadSynonyms();
+  if (tab === 'settings') loadSettings();
   if (tab === 'index') loadIndex();
 }
 
@@ -741,6 +756,34 @@ document.getElementById('corr-extract').addEventListener('click', async () => {
 });
 
 document.getElementById('corr-save').addEventListener('click', () => saveNewCorrection());
+
+async function loadSettings() {
+  const data = await j('/api/admin/settings');
+  document.getElementById('set-title').value = data.title;
+  document.getElementById('set-default').textContent =
+    'Значение по умолчанию из переменной APP_TITLE в .env: ' + data.default_title;
+  document.getElementById('set-msg').textContent = '';
+}
+
+document.getElementById('set-save').addEventListener('click', async () => {
+  const msg = document.getElementById('set-msg');
+  const value = document.getElementById('set-title').value.trim();
+  if (!value) { msg.textContent = 'Введите название'; return; }
+  try {
+    await j('/api/admin/settings', { method: 'PATCH', body: JSON.stringify({ title: value }) });
+    msg.textContent = 'Сохранено, обновите чат';
+  } catch (err) { msg.textContent = err.message; }
+});
+
+document.getElementById('set-reset').addEventListener('click', async () => {
+  const msg = document.getElementById('set-msg');
+  try {
+    const data = await j('/api/admin/settings');
+    await j('/api/admin/settings', { method: 'PATCH', body: JSON.stringify({ title: data.default_title }) });
+    document.getElementById('set-title').value = data.default_title;
+    msg.textContent = 'Возвращено значение из .env';
+  } catch (err) { msg.textContent = err.message; }
+});
 
 let indexTimer = null;
 let synItems = [];

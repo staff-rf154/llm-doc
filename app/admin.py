@@ -53,6 +53,27 @@ class PageExtractRequest(BaseModel):
     doc_pages: str = Field(min_length=1)
 
 
+class SettingsUpdate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+
+
+@router.get("/settings")
+def get_settings(user: dict = Depends(auth.require_admin)) -> dict:
+    return {
+        "title": appdb.get_setting("title", config.APP_TITLE) or config.APP_TITLE,
+        "default_title": config.APP_TITLE,
+    }
+
+
+@router.patch("/settings")
+def update_settings(
+    payload: SettingsUpdate,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    appdb.set_setting("title", payload.title.strip())
+    return {"title": appdb.get_setting("title", config.APP_TITLE)}
+
+
 class RatingFilter(BaseModel):
     vote: str | None = None
 

@@ -212,7 +212,7 @@
 </head>
 <body>
 <header>
-  <h1>База знаний company</h1>
+  <h1 id="title">База знаний</h1>
   <span class="badge" id="model">—</span>
   <span class="badge" id="index">—</span>
   <div class="spacer"></div>
@@ -317,7 +317,16 @@ document.getElementById('admin-link').addEventListener('click', () => {
   location.href = '/admin';
 });
 
+function loadTitle() {
+  return fetch('/api/title').then(r => r.json()).then(d => {
+    const name = (d && d.title) || 'База знаний';
+    document.getElementById('title').textContent = name;
+    document.title = name;
+  }).catch(() => {});
+}
+
 function bootstrap() {
+  loadTitle();
   fetch('/health').then(r => r.json()).then(d => {
     document.getElementById('model').textContent = d.llm_model;
   });
