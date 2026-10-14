@@ -959,6 +959,15 @@ function paramRow(item) {
   } else if (item.type === 'prompt') {
     input = el('textarea', { id: inputId, style: 'min-height:150px' });
     input.value = item.value;
+  } else if (item.type === 'bool') {
+    input = el('select', { id: inputId });
+    [['1', 'Включено'], ['0', 'Выключено']].forEach(pair => {
+      const option = document.createElement('option');
+      option.value = pair[0];
+      option.textContent = pair[1];
+      input.appendChild(option);
+    });
+    input.value = item.value === '0' ? '0' : '1';
   } else {
     input = el('input', { id: inputId });
     input.value = item.value;
