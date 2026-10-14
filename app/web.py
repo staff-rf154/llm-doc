@@ -24,6 +24,7 @@ class Turn(BaseModel):
 class ChatRequest(BaseModel):
     messages: list[Turn] = Field(min_length=1)
     top_k: int | None = Field(default=None, ge=1, le=20)
+    show_images: bool = True
 
 
 def _history(messages: list[Turn]) -> list[dict]:
@@ -34,8 +35,8 @@ def _history(messages: list[Turn]) -> list[dict]:
     return turns
 
 
-def _related_images(question: str) -> list[dict]:
-    if not settings.bool_value("IMAGE_SEARCH_ENABLED", True):
+def _related_images(question: str, allowed: bool = True) -> list[dict]:
+    if not allowed or not settings.bool_value("IMAGE_SEARCH_ENABLED", True):
         return []
     try:
         import images
@@ -59,7 +60,7 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
             {"type": "request", "data": {"request_id": request_id}},
             {"type": "meta", "data": {"grounded": True, "corrected": False}},
         ]
-        found = _related_images(question)
+        found = _related_images(question, req.show_images)
         if found:
             payload.append({"type": "images", "data": found})
         payload.append({"type": "done", "data": ""})
@@ -162,7 +163,7 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
         yield _sse_event(
             {"type": "meta", "data": {"grounded": grounded, "corrected": False}}
         )
-        found = _related_images(question)
+        found = _related_images(question, req.show_images)
         if found:
             yield _sse_event({"type": "images", "data": found})
         yield _sse_event({"type": "done", "data": ""})

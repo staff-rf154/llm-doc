@@ -103,6 +103,7 @@ def me(user: dict = Depends(auth.current_user)) -> dict:
 class AskRequest(BaseModel):
     question: str = Field(min_length=2, examples=["Как восстановить доступ к VPN?"])
     top_k: int | None = Field(default=None, ge=1, le=20)
+    show_images: bool = True
 
 
 class RetrieveRequest(BaseModel):

@@ -145,6 +145,15 @@
   #send { padding: 11px 22px; background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 500; }
   #send:disabled { opacity: .45; cursor: not-allowed; }
   .hint { max-width: 900px; margin: 8px auto 0; font-size: 11px; color: var(--muted); }
+  .hint-row {
+    max-width: 900px;
+    margin: 8px auto 0;
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    flex-wrap: wrap;
+  }
+  .hint-row .hint { margin: 0; }
   .examples { max-width: 900px; margin: 0 auto 16px; display: flex; flex-wrap: wrap; gap: 8px; }
   .examples button { font-size: 12px; padding: 6px 11px; }
   .examples-title { width: 100%; font-size: 12px; color: var(--muted); }
@@ -208,6 +217,8 @@
     font-size: 12px;
   }
   #who { font-size: 12px; color: var(--muted); }
+  .switch { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
+  .switch input { width: 14px; height: 14px; accent-color: var(--accent); }
   .images { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
   .images figure { margin: 0; max-width: 320px; }
   .images img {
@@ -266,7 +277,13 @@
     <textarea id="input" rows="1" placeholder="Задайте вопрос по документации... (Enter — отправить, Shift+Enter — новая строка)"></textarea>
     <button id="send" type="submit">Спросить</button>
   </form>
-  <div class="hint">Ответы формируются только по проиндексированной документации. Проверьте источники перед использованием.</div>
+  <div class="hint-row">
+    <div class="hint">Ответы формируются только по проиндексированной документации. Проверьте источники перед использованием.</div>
+    <label class="switch" title="Показывать найденные в документации изображения под ответом">
+      <input type="checkbox" id="show-images" checked>
+      <span>Изображения из документации</span>
+    </label>
+  </div>
 </footer>
 </div>
 
@@ -280,6 +297,12 @@ const examples = document.getElementById('examples');
 const capabilitiesEl = document.getElementById('capabilities');
 const history = [];
 let busy = false;
+const imagesSwitch = document.getElementById('show-images');
+
+imagesSwitch.checked = localStorage.getItem('show_images') !== 'off';
+imagesSwitch.addEventListener('change', () => {
+  localStorage.setItem('show_images', imagesSwitch.checked ? 'on' : 'off');
+});
 let me = { id: null, username: '', role: 'guest' };
 
 const appEl = document.getElementById('app');
@@ -575,7 +598,7 @@ async function ask(question) {
     const res = await fetch('/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ messages: history })
+      body: JSON.stringify({ messages: history, show_images: imagesSwitch.checked })
     });
     if (!res.ok) throw new Error('HTTP ' + res.status);
 
