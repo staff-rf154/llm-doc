@@ -8,7 +8,7 @@ import auth
 import config
 import corrections
 import docpages
-import ingest
+import exclusions
 import images
 import ingest
 import settings
@@ -476,16 +476,18 @@ def create_exclusion(
     payload: ExclusionCreate,
     user: dict = Depends(auth.require_admin),
 ) -> dict:
-    existing = appdb.get_exclusion_by_pattern(payload.pattern)
-    if existing:
-        return existing
-    item = appdb.add_exclusion(
-        payload.pattern,
-        origin="admin",
-        author=user["username"],
-        comment=payload.comment,
-    )
-    exclusions.invalidate()
+    try:
+        existing = appdb.get_exclusion_by_pattern(payload.pattern)
+        if existing:
+            return existing
+        item = appdb.add_exclusion(
+            payload.pattern,
+            origin="admin",
+            author=user["username"],
+            comment=payload.comment,
+        )
+    finally:
+        exclusions.invalidate()
     return item or {}
 
 
@@ -494,9 +496,12 @@ def delete_exclusion(
     exclusion_id: int,
     user: dict = Depends(auth.require_admin),
 ) -> dict:
-    if not appdb.delete_exclusion(exclusion_id):
+    try:
+        removed = appdb.delete_exclusion(exclusion_id)
+    finally:
+        exclusions.invalidate()
+    if not removed:
         raise HTTPException(status_code=404, detail="Правило не найдено")
-    exclusions.invalidate()
     return {"ok": True}
 
 
