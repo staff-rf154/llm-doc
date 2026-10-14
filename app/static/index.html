@@ -155,6 +155,10 @@
     justify-content: center;
     padding: 24px;
   }
+  #auth[hidden], #app[hidden], header button[hidden], .reference[hidden], .rate[hidden] {
+    display: none;
+  }
+  #app { flex: 1; display: flex; flex-direction: column; }
   #auth .card {
     background: var(--panel);
     border: 1px solid var(--border);
@@ -193,6 +197,17 @@
 </style>
 </head>
 <body>
+<header>
+  <h1>База знаний company</h1>
+  <span class="badge" id="model">—</span>
+  <span class="badge" id="index">—</span>
+  <div class="spacer"></div>
+  <span id="who"></span>
+  <button id="admin-link" hidden>Админ</button>
+  <button id="logout" hidden>Выйти</button>
+  <button id="clear" hidden>Очистить</button>
+</header>
+
 <div id="auth">
   <form class="card" id="login-form">
     <h2>Вход в базу знаний</h2>
@@ -204,17 +219,6 @@
 </div>
 
 <div id="app" hidden>
-<header>
-  <h1>База знаний company</h1>
-  <span class="badge" id="model">—</span>
-  <span class="badge" id="index">—</span>
-  <div class="spacer"></div>
-  <span id="who"></span>
-  <button id="admin-link" hidden>Админ</button>
-  <button id="logout">Выйти</button>
-  <button id="clear">Очистить</button>
-</header>
-
 <div id="log"><div id="log-inner">
   <div class="capabilities" id="capabilities"></div>
   <div class="examples" id="examples"></div>
@@ -256,14 +260,22 @@ async function api(path, options) {
 function showLogin() {
   authEl.hidden = false;
   appEl.hidden = true;
+  document.getElementById('logout').hidden = true;
+  document.getElementById('clear').hidden = true;
+  document.getElementById('admin-link').hidden = true;
+  document.getElementById('who').textContent = 'гость';
 }
 
 function showApp(user) {
   me = user;
   authEl.hidden = true;
   appEl.hidden = false;
-  document.getElementById('who').textContent = user.username + (user.role === 'admin' ? ' (админ)' : '');
+  document.getElementById('logout').hidden = false;
+  document.getElementById('clear').hidden = false;
   document.getElementById('admin-link').hidden = user.role !== 'admin';
+  document.getElementById('who').textContent =
+    user.username + (user.role === 'admin' ? ' · админ' : '');
+  document.getElementById('input').focus();
 }
 
 document.getElementById('login-form').addEventListener('submit', async e => {
@@ -596,7 +608,7 @@ document.getElementById('clear').addEventListener('click', () => {
   loadCapabilities();
 });
 
-input.focus();
+if (!appEl.hidden) input.focus();
 </script>
 </body>
 </html>
