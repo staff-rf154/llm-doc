@@ -263,7 +263,12 @@
       <h2>Изображения из документации</h2>
       <div class="row">
         <button id="img-start">Извлечь изображения из PDF</button>
+        <button class="primary" id="img-apply">Сохранить параметры и переизвлечь</button>
         <span class="muted" id="img-state">—</span>
+      </div>
+      <div class="muted" style="margin-bottom:8px">
+        Параметры отбора — в группе «Изображения из документации» выше.
+        После их изменения нажмите «Сохранить параметры», затем «Сохранить параметры и переизвлечь».
       </div>
       <div class="muted">
         Встроенные иллюстрации извлекаются из PDF, подписываются текстом страницы
@@ -605,6 +610,21 @@ async function loadImages() {
     imageTimer = setTimeout(loadImages, 3000);
   }
 }
+
+document.getElementById('img-apply').addEventListener('click', async () => {
+  const msg = document.getElementById('set-params-msg');
+  const values = {};
+  document.querySelectorAll('#set-params [id^="param-"]').forEach(node => {
+    values[node.id.replace('param-', '')] = node.value;
+  });
+  try {
+    await j('/api/admin/settings/params', { method: 'PATCH', body: JSON.stringify({ values }) });
+    await j('/api/admin/images/start', { method: 'POST' });
+    msg.textContent = 'Параметры сохранены, извлечение запущено';
+    loadSettings();
+    loadImages();
+  } catch (err) { msg.textContent = err.message; }
+});
 
 document.getElementById('img-start').addEventListener('click', async () => {
   document.getElementById('img-state').textContent = 'запуск…';

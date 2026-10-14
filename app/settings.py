@@ -45,6 +45,7 @@ GENERATION = "Генерация"
 RETRIEVAL = "Поиск и чанкинг"
 BEHAVIOUR = "Поведение ответа"
 INGEST = "Индексация"
+IMAGES = "Изображения из документации"
 
 PARAMS: list[Param] = [
     Param("LLM_MODEL", "Модель генерации", group=GENERATION,
@@ -77,17 +78,17 @@ PARAMS: list[Param] = [
           hint="Сколько файлов обрабатывается одновременно"),
     Param("INGEST_BATCH_SIZE", "Точек в одном upsert", "int", group=INGEST),
     Param("INGEST_CHECKPOINT_EVERY", "Чанков между срезами", "int", group=INGEST),
-    Param("IMAGE_SEARCH_ENABLED", "Искать изображения в ответах", "bool", group=BEHAVIOUR,
+    Param("IMAGE_SEARCH_ENABLED", "Искать изображения в ответах", "bool", group=IMAGES,
           hint="Прикладывать найденные иллюстрации из документации к ответу"),
-    Param("IMAGE_MATCH_THRESHOLD", "Порог релевантности изображения", "float", group=BEHAVIOUR,
+    Param("IMAGE_MATCH_THRESHOLD", "Порог релевантности изображения", "float", group=IMAGES,
           hint="Ниже порога картинка не показывается. Для e5 обычно 0.7–0.8"),
-    Param("IMAGE_MAX", "Максимум изображений в ответе", "int", group=BEHAVIOUR),
-    Param("IMAGE_MIN_SIDE", "Минимальный размер изображения, px", "int", group=INGEST,
+    Param("IMAGE_MAX", "Максимум изображений в ответе", "int", group=IMAGES),
+    Param("IMAGE_MIN_SIDE", "Минимальный размер изображения, px", "int", group=IMAGES,
           hint="Мелкие иконки, тайлы и разделители отбрасываются"),
-    Param("IMAGE_PER_PAGE", "Изображений с одной страницы", "int", group=INGEST),
-    Param("IMAGE_PER_DOC", "Изображений в документе", "int", group=INGEST,
+    Param("IMAGE_PER_PAGE", "Изображений с одной страницы", "int", group=IMAGES),
+    Param("IMAGE_PER_DOC", "Изображений в документе", "int", group=IMAGES,
           hint="Берутся самые крупные изображения документа"),
-    Param("IMAGE_SKIP_FULLPAGE", "Доля площади страницы для фоновых картинок", "float", group=INGEST,
+    Param("IMAGE_SKIP_FULLPAGE", "Доля площади страницы для фоновых картинок", "float", group=IMAGES,
           hint="Картинки крупнее этой доли страницы считаются фоном и пропускаются"),
 ]
 
@@ -247,6 +248,6 @@ def reset(key: str) -> None:
 
 
 def groups() -> list[str]:
-    order = [GENERATION, RETRIEVAL, BEHAVIOUR, INGEST]
+    order = [GENERATION, RETRIEVAL, BEHAVIOUR, IMAGES, INGEST]
     present = {param.group for param in PARAMS}
     return [group for group in order if group in present]
