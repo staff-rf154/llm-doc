@@ -33,23 +33,38 @@ services:
     build:
       context: ./app
     container_name: llm-app
+    env_file:
+      - .env
     environment:
-      QDRANT_URL: http://qdrant:6333
-      QDRANT_API_KEY: ${QDRANT_API_KEY:-}
-      QDRANT_COLLECTION: ${QDRANT_COLLECTION:-docs}
-      LLM_BASE_URL: ${LLM_BASE_URL:-http://ollama:11434/v1}
-      LLM_API_KEY: ${LLM_API_KEY:-}
-      LLM_MODEL: ${LLM_MODEL:-qwen2.5:7b-instruct}
-      EMBEDDING_MODEL: ${EMBEDDING_MODEL:-intfloat/multilingual-e5-base}
-      HF_HOME: /app/.cache/huggingface
-      HF_HUB_DISABLE_TELEMETRY: "1"
-      OMP_NUM_THREADS: ${OMP_NUM_THREADS:-4}
-      INGEST_WORKERS: ${INGEST_WORKERS:-8}
-      EMBED_BATCH: ${EMBED_BATCH:-16}
-      APP_DB: /data/app/app.db
-      ADMIN_USERNAME: ${ADMIN_USERNAME:-}
-      ADMIN_PASSWORD: ${ADMIN_PASSWORD:-}
-      APP_TITLE: ${APP_TITLE:-База знаний company}
+      - QDRANT_URL=http://qdrant:6333
+      - QDRANT_API_KEY=${QDRANT_API_KEY:-}
+      - QDRANT_COLLECTION=${QDRANT_COLLECTION:-docs}
+      - EMBEDDING_MODEL=${EMBEDDING_MODEL:-intfloat/multilingual-e5-base}
+      - HF_HOME=/app/.cache/huggingface
+      - HF_HUB_DISABLE_TELEMETRY=1
+      - OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}
+      - EMBED_BATCH=${EMBED_BATCH:-16}
+      - APP_DB=/data/app/app.db
+      - ADMIN_USERNAME=${ADMIN_USERNAME:-}
+      - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
+      - APP_TITLE=${APP_TITLE:-База знаний company}
+      # настраиваются в кабинете, значения по умолчанию — из .env
+      - CHUNK_SIZE=${CHUNK_SIZE:-1000}
+      - CHUNK_OVERLAP=${CHUNK_OVERLAP:-150}
+      - RETRIEVE_TOP_K=${RETRIEVE_TOP_K:-5}
+      - LLM_TEMPERATURE=${LLM_TEMPERATURE:-0.1}
+      - LLM_MAX_TOKENS=${LLM_MAX_TOKENS:-0}
+      - CORRECTIONS_COLLECTION=${CORRECTIONS_COLLECTION:-corrections}
+      - CORRECTION_MATCH_THRESHOLD=${CORRECTION_MATCH_THRESHOLD:-0.86}
+      - CORRECTION_EXAMPLES=${CORRECTION_EXAMPLES:-2}
+      - SYNONYMS_MAX_VARIANTS=${SYNONYMS_MAX_VARIANTS:-6}
+      - PROMPTS_MAX=${PROMPTS_MAX:-8}
+      - INGEST_WORKERS=${INGEST_WORKERS:-8}
+      - INGEST_BATCH_SIZE=${INGEST_BATCH_SIZE:-64}
+      - INGEST_CHECKPOINT_EVERY=${INGEST_CHECKPOINT_EVERY:-64}
+      - LLM_BASE_URL=${LLM_BASE_URL:-http://ollama:11434/v1}
+      - LLM_API_KEY=${LLM_API_KEY:-ollama}
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:7b-instruct}
     volumes:
       - ./data/docs:/data/docs:ro
       - ./data/extracted:/data/extracted
