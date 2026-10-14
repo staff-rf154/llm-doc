@@ -118,10 +118,17 @@
   .cursor { display: inline-block; width: 7px; background: var(--accent); animation: b 1s steps(2) infinite; }
   @keyframes b { 50% { opacity: 0 } }
   footer {
+    position: fixed;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    z-index: 90;
     border-top: 1px solid var(--border);
     background: var(--panel);
     padding: 14px 20px;
+    box-shadow: 0 -1px 6px rgba(0, 0, 0, .35);
   }
+  #app, #auth { padding-bottom: 108px; }
   #form { max-width: 900px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; }
   textarea {
     flex: 1;
