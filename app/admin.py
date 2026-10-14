@@ -143,13 +143,6 @@ def requests(
     }
 
 
-@router.get("/disliked")
-def disliked(limit: int = 50, user: dict = Depends(auth.require_admin)) -> dict:
-    """Вопросы с дизлайком — обязательны к ознакомлению администратором."""
-    items = appdb.disliked(limit=limit)
-    return {"items": items, "total": len(items)}
-
-
 @router.get("/stats")
 def stats(days: int = 30, user: dict = Depends(auth.require_admin)) -> dict:
     return {

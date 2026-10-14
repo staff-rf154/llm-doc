@@ -361,11 +361,6 @@ def list_requests(
     return [dict(row) for row in rows]
 
 
-def disliked(limit: int = 50) -> list[dict]:
-    """Вопросы с отрицательной оценкой — обязательны к ознакомлению администратором."""
-    return list_requests(limit=limit, vote="down", sort="date", order="desc")
-
-
 def count_requests(vote: str | None = None) -> int:
     ensure_schema()
     query = """

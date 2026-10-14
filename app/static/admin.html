@@ -90,13 +90,6 @@
   .edit { display: grid; gap: 8px; }
   textarea { min-height: 90px; resize: vertical; }
   .hidden { display: none; }
-  .attention { border-color: var(--bad); }
-  .attention h2 { color: var(--bad); }
-  .attention-item { border-top: 1px solid var(--border); padding: 12px 0; }
-  .attention-item:first-child { border-top: none; }
-  .attention-item .q { font-weight: 600; }
-  .attention-item .a { color: var(--muted); margin: 6px 0; white-space: pre-wrap; }
-  .attention-empty { color: var(--muted); font-size: 13px; padding: 8px 0; }
 </style>
 </head>
 <body>
@@ -116,13 +109,7 @@
 </header>
 
 <main>
-  <section id="tab-overview" class="tab">
-    <div class="card attention" id="attention">
-      <h2>Требует внимания: вопросы с отрицательной оценкой</h2>
-      <div class="muted" id="attention-count"></div>
-      <div id="attention-list"></div>
-    </div>
-  </section>
+  <section id="tab-overview" class="tab"></section>
 
   <section id="tab-users" class="tab hidden">
     <div class="card">
@@ -313,11 +300,7 @@ async function loadOverview() {
   const data = await j('/api/admin/stats');
   const s = data.summary;
   const root = document.getElementById('tab-overview');
-  const attention = document.getElementById('attention');
   while (root.firstChild) root.removeChild(root.firstChild);
-  root.appendChild(attention);
-
-  await loadAttention();
 
   const stats = el('div', { className: 'card' }, [
     el('h2', { textContent: 'Сводка' }),
@@ -379,40 +362,6 @@ async function loadOverview() {
   t3.appendChild(b3);
   top.appendChild(t3);
   root.appendChild(top);
-}
-
-async function loadAttention() {
-  const data = await j('/api/admin/disliked?limit=50');
-  document.getElementById('attention-count').textContent =
-    'всего вопросов с дизлайком: ' + data.total + '. Ознакомьтесь и исправьте ответ в разделе «Оценки и правки».';
-  const list = document.getElementById('attention-list');
-  while (list.firstChild) list.removeChild(list.firstChild);
-  if (!data.items.length) {
-    list.appendChild(el('div', { className: 'attention-empty', textContent: 'Дизлайков нет.' }));
-    return;
-  }
-  data.items.forEach(item => {
-    list.appendChild(el('div', { className: 'attention-item' }, [
-      el('div', { className: 'q', textContent: item.question }),
-      el('div', {
-        className: 'muted',
-        textContent: item.created_at + ' · ' + (item.username || 'гость') +
-          ' · ответ ' + item.latency_ms + ' мс' +
-          (item.corrected ? ' · исправленный админом' : '') +
-          (item.doc_ref ? ' · ' + item.doc_ref : '')
-      }),
-      el('div', { className: 'a', textContent: item.answer }),
-      item.rating_comment
-        ? el('div', { className: 'muted', textContent: 'Комментарий пользователя: ' + item.rating_comment })
-        : document.createTextNode(''),
-      el('button', { textContent: 'Исправить ответ', onclick: () => openRequestEditor(item) })
-    ]));
-  });
-}
-
-function openRequestEditor(item) {
-  document.querySelector('nav button[data-tab="requests"]').click();
-  loadRequests().then(() => editAnswer(item));
 }
 
 function stat(n, title) {
