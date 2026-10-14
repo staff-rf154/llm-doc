@@ -11,6 +11,7 @@ import docpages
 import ingest
 import synonymdb
 import vectorstore as vs
+import verify
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -337,6 +338,24 @@ def upsert_correction_by_question(
             user,
         )
     return create_correction(payload, user)
+
+
+@router.get("/verify")
+def verify_status(user: dict = Depends(auth.require_admin)) -> dict:
+    status = verify.job.snapshot()
+    status["summary"] = appdb.check_summary()
+    return status
+
+
+@router.post("/verify", status_code=202)
+def verify_start(user: dict = Depends(auth.require_admin)) -> dict:
+    return verify.job.start()
+
+
+@router.post("/verify/reset")
+def verify_reset(user: dict = Depends(auth.require_admin)) -> dict:
+    appdb.reset_checks()
+    return {"ok": True, "summary": appdb.check_summary()}
 
 
 @router.get("/index")

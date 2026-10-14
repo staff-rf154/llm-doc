@@ -72,11 +72,18 @@ CREATE INDEX IF NOT EXISTS idx_corrections_status ON corrections(status);
 """
 
 CORRECTION_COLUMNS = ("doc_name", "doc_pages", "doc_ref")
+CHECK_COLUMNS = ("check_status", "check_comment", "checked_at", "check_collection")
 REQUEST_COLUMNS = ("doc_name", "doc_pages", "doc_ref")
+
+CHECK_STATUSES = ("unchecked", "verified", "review")
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
-    for table, columns in (("corrections", CORRECTION_COLUMNS), ("requests", REQUEST_COLUMNS)):
+    for table, columns in (
+        ("corrections", CORRECTION_COLUMNS),
+        ("corrections", CHECK_COLUMNS),
+        ("requests", REQUEST_COLUMNS),
+    ):
         existing = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
         for column in columns:
             if column not in existing:
@@ -457,6 +464,57 @@ def delete_correction(correction_id: int) -> None:
         conn.execute("DELETE FROM corrections WHERE id = ?", (correction_id,))
 
 
+def set_check(
+    correction_id: int,
+    status: str,
+    comment: str,
+    collection: str = "",
+) -> None:
+    ensure_schema()
+    if status not in CHECK_STATUSES:
+        status = "review"
+    with _LOCK, connect() as conn:
+        conn.execute(
+            """
+            UPDATE corrections
+            SET check_status = ?, check_comment = ?, checked_at = ?, check_collection = ?
+            WHERE id = ?
+            """,
+            (status, comment.strip()[:500], now(), collection, correction_id),
+        )
+
+
+def reset_checks() -> None:
+    ensure_schema()
+    with _LOCK, connect() as conn:
+        conn.execute(
+            """
+            UPDATE corrections
+            SET check_status = '', check_comment = '', checked_at = '', check_collection = ''
+            """
+        )
+
+
+def check_summary() -> dict:
+    ensure_schema()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT COUNT(*) AS total,
+                   SUM(CASE WHEN check_status = 'verified' THEN 1 ELSE 0 END) AS verified,
+                   SUM(CASE WHEN check_status = 'review' THEN 1 ELSE 0 END) AS review,
+                   SUM(CASE WHEN check_status = '' THEN 1 ELSE 0 END) AS unchecked
+            FROM corrections WHERE status = 'active'
+            """
+        ).fetchone()
+    return {
+        "total": int(row["total"]),
+        "verified": int(row["verified"] or 0),
+        "review": int(row["review"] or 0),
+        "unchecked": int(row["unchecked"] or 0),
+    }
+
+
 def stats_by_user() -> list[dict]:
     ensure_schema()
     with connect() as conn:
@@ -524,4 +582,6 @@ def summary() -> dict:
                 (SELECT COUNT(*) FROM corrections WHERE status = 'active') AS active_corrections
             """
         ).fetchone()
-    return dict(row)
+    data = dict(row)
+    data.update(check_summary())
+    return data

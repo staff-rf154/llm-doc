@@ -178,6 +178,7 @@ class ReindexJob:
                 collection=result["collection"],
                 result=result,
             )
+            self._start_verification()
         except Exception as exc:
             self._gate.set()
             self._update(
@@ -185,6 +186,15 @@ class ReindexJob:
                 finished_at=datetime.now().isoformat(timespec="seconds"),
                 error=str(exc),
             )
+
+    @staticmethod
+    def _start_verification() -> None:
+        try:
+            import verify
+
+            verify.job.start()
+        except Exception as exc:
+            print(f"сверка исправлений не запущена: {exc}")
 
     def mark_interrupted(self) -> None:
         with self._lock:

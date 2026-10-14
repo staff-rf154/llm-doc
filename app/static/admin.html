@@ -175,8 +175,13 @@
     </div>
     <div class="card">
       <h2>Исправления</h2>
+      <div class="row">
+        <button id="corr-verify">Проверить исправления по документации</button>
+        <button id="corr-verify-reset">Сбросить результаты проверки</button>
+        <span class="muted" id="corr-verify-state">—</span>
+      </div>
       <table id="corr-table">
-        <thead><tr><th>ID</th><th>Вопрос</th><th>Ответ</th><th>Ссылка</th><th>Статус</th><th>Автор</th><th></th></tr></thead>
+        <thead><tr><th>ID</th><th>Вопрос</th><th>Ответ</th><th>Ссылка</th><th>Проверка</th><th>Статус</th><th>Автор</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -298,7 +303,9 @@ async function loadOverview() {
       stat(s.likes, 'лайков'),
       stat(s.dislikes, 'дизлайков'),
       stat(s.corrections, 'исправлений'),
-      stat(s.active_corrections, 'активных исправлений')
+      stat(s.active_corrections, 'активных исправлений'),
+      stat(s.verified || 0, 'подтверждено документацией'),
+      stat(s.review || 0, 'требует проверки')
     ])
   ]);
   root.appendChild(stats);
@@ -522,9 +529,57 @@ function editAnswer(item) {
   wrap.scrollIntoView({ block: 'start' });
 }
 
+let verifyTimer = null;
+
+function checkLabel(status) {
+  if (status === 'verified') return 'подтверждено';
+  if (status === 'review') return 'требует проверки';
+  return 'не проверено';
+}
+
+function checkClass(status) {
+  if (status === 'verified') return 'up';
+  if (status === 'review') return 'down';
+  return '';
+}
+
+async function loadVerify() {
+  const data = await j('/api/admin/verify');
+  const s = data.summary || {};
+  const line = 'активных: ' + (s.total || 0) +
+    ' · подтверждено: ' + (s.verified || 0) +
+    ' · требует проверки: ' + (s.review || 0) +
+    ' · не проверено: ' + (s.unchecked || 0);
+  const extra = data.status === 'running'
+    ? ' | сверка идёт: ' + data.done + '/' + data.total
+    : (data.status === 'error' ? ' | ошибка: ' + data.error : '');
+  document.getElementById('corr-verify-state').textContent = line + extra;
+  if (data.status === 'running') {
+    if (verifyTimer) clearTimeout(verifyTimer);
+    verifyTimer = setTimeout(() => loadVerify().then(loadCorrections), 3000);
+  } else if (verifyTimer) {
+    clearTimeout(verifyTimer);
+    verifyTimer = null;
+  }
+}
+
+document.getElementById('corr-verify').addEventListener('click', async () => {
+  document.getElementById('corr-verify-state').textContent = 'запуск сверки…';
+  await j('/api/admin/verify', { method: 'POST' });
+  loadVerify();
+});
+
+document.getElementById('corr-verify-reset').addEventListener('click', async () => {
+  if (!confirm('Сбросить результаты проверки исправлений?')) return;
+  await j('/api/admin/verify/reset', { method: 'POST' });
+  loadCorrections();
+  loadVerify();
+});
+
 async function loadCorrections() {
   await loadDocuments();
   fillDocumentSelect(document.getElementById('corr-doc'));
+  loadVerify();
   const data = await j('/api/admin/corrections');
   const body = document.querySelector('#corr-table tbody');
   while (body.firstChild) body.removeChild(body.firstChild);
@@ -534,6 +589,13 @@ async function loadCorrections() {
       el('td', { textContent: item.question }),
       el('td', { textContent: item.answer.slice(0, 200) }),
       el('td', { textContent: item.doc_ref || '—' }),
+      el('td', {}, [
+        el('span', { className: 'pill ' + checkClass(item.check_status), textContent: checkLabel(item.check_status) }),
+        item.check_comment
+          ? el('div', { className: 'muted', textContent: item.check_comment })
+          : document.createTextNode(''),
+        item.checked_at ? el('div', { className: 'muted', textContent: item.checked_at }) : document.createTextNode('')
+      ]),
       el('td', { textContent: item.status }),
       el('td', { textContent: item.author }),
       el('td', {}, [
