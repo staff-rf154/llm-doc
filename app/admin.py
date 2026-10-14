@@ -457,6 +457,49 @@ def images_start(user: dict = Depends(auth.require_admin)) -> dict:
     return images.job.start()
 
 
+class ExclusionCreate(BaseModel):
+    pattern: str = Field(min_length=2, max_length=200)
+    comment: str = ""
+
+
+@router.get("/exclusions")
+def list_exclusions(user: dict = Depends(auth.require_admin)) -> dict:
+    return {
+        "items": appdb.list_exclusions(),
+        "documents": [item["name"] for item in docpages.list_documents()],
+        "enabled": config.EXCLUSIONS_ENABLED,
+    }
+
+
+@router.post("/exclusions", status_code=201)
+def create_exclusion(
+    payload: ExclusionCreate,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    existing = appdb.get_exclusion_by_pattern(payload.pattern)
+    if existing:
+        return existing
+    item = appdb.add_exclusion(
+        payload.pattern,
+        origin="admin",
+        author=user["username"],
+        comment=payload.comment,
+    )
+    exclusions.invalidate()
+    return item or {}
+
+
+@router.delete("/exclusions/{exclusion_id}")
+def delete_exclusion(
+    exclusion_id: int,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    if not appdb.delete_exclusion(exclusion_id):
+        raise HTTPException(status_code=404, detail="Правило не найдено")
+    exclusions.invalidate()
+    return {"ok": True}
+
+
 @router.get("/index")
 def index_status(user: dict = Depends(auth.require_admin)) -> dict:
     status = ingest.job.snapshot()

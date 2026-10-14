@@ -87,6 +87,33 @@ def loaded_chunks(name: str) -> dict[str, set[int]]:
     return result
 
 
+def known_sources(limit: int = 5000) -> list[str]:
+    """Имена всех документов в активной коллекции."""
+    client = get_qdrant()
+    target = target_name()
+    if not client.collection_exists(target):
+        return []
+    sources: list[str] = []
+    seen: set[str] = set()
+    offset = None
+    while len(sources) < limit:
+        points, offset = client.scroll(
+            collection_name=target,
+            limit=2048,
+            offset=offset,
+            with_payload=True,
+            with_vectors=False,
+        )
+        for point in points:
+            source = (point.payload or {}).get("source")
+            if source and source not in seen:
+                seen.add(source)
+                sources.append(source)
+        if offset is None:
+            break
+    return sources
+
+
 def target_name() -> str:
     """Имя коллекции, по которой сейчас идёт поиск: алиас или сама коллекция."""
     client = get_qdrant()

@@ -101,6 +101,7 @@
     <button data-tab="requests">Оценки и правки</button>
     <button data-tab="corrections">Исправления</button>
     <button data-tab="synonyms">Синонимы</button>
+    <button data-tab="exclusions">Исключения</button>
     <button data-tab="settings">Настройки</button>
     <button data-tab="index">Индексация</button>
   </nav>
@@ -236,6 +237,31 @@
     </div>
   </section>
 
+  <section id="tab-exclusions" class="tab hidden">
+    <div class="card">
+      <h2>Исключить документ из ответов</h2>
+      <div class="muted" style="margin-bottom:12px">
+        Фрагменты этих документов не попадут в ответ. Правила можно добавлять вручную —
+        они же появляются автоматически, если пользователь в комментарии к оценке
+        напишет, например: «исключить из ответа FileAuditor_manual.pdf, SIEM_help.pdf».
+      </div>
+      <div class="row">
+        <select id="exc-doc" style="max-width:420px"></select>
+        <input id="exc-pattern" placeholder="Или введите имя файла" style="max-width:260px">
+        <input id="exc-comment" placeholder="Комментарий (необязательно)" style="max-width:260px">
+        <button class="primary" id="exc-add">Добавить исключение</button>
+        <span class="muted" id="exc-msg"></span>
+      </div>
+    </div>
+    <div class="card">
+      <h2>Список исключений</h2>
+      <table id="exc-table">
+        <thead><tr><th>Файл</th><th>Источник</th><th>Автор</th><th>Комментарий</th><th>Упоминаний в ответах</th><th>Добавлено</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
   <section id="tab-settings" class="tab hidden">
     <div class="card">
       <h2>Оформление</h2>
@@ -330,6 +356,7 @@ function loadTab(tab) {
   if (tab === 'requests') loadRequests();
   if (tab === 'corrections') loadCorrections();
   if (tab === 'synonyms') loadSynonyms();
+  if (tab === 'exclusions') loadExclusions();
   if (tab === 'settings') { loadSettings(); loadImages(); }
   if (tab === 'index') loadIndex();
 }
@@ -591,6 +618,62 @@ function editAnswer(item) {
 }
 
 let imageTimer = null;
+
+async function loadExclusions() {
+  const data = await j('/api/admin/exclusions');
+  const select = document.getElementById('exc-doc');
+  const previous = select.value;
+  while (select.firstChild) select.removeChild(select.firstChild);
+  (data.documents || []).forEach(name => {
+    const option = document.createElement('option');
+    option.value = name;
+    option.textContent = name;
+    select.appendChild(option);
+  });
+  if (previous) select.value = previous;
+  document.getElementById('exc-msg').textContent = '';
+
+  const body = document.querySelector('#exc-table tbody');
+  while (body.firstChild) body.removeChild(body.firstChild);
+  (data.items || []).forEach(item => {
+    body.appendChild(el('tr', {}, [
+      el('td', { textContent: item.pattern }),
+      el('td', { textContent: item.origin === 'comment' ? 'из комментария' : 'администратор' }),
+      el('td', { textContent: item.author || '—' }),
+      el('td', { textContent: item.comment || '—' }),
+      el('td', { textContent: item.mentions || 0 }),
+      el('td', { textContent: item.created_at }),
+      el('td', {}, [
+        el('button', {
+          className: 'danger',
+          textContent: 'Удалить',
+          onclick: async () => {
+            if (!confirm('Вернуть документ в ответы?')) return;
+            await j('/api/admin/exclusions/' + item.id, { method: 'DELETE' });
+            loadExclusions();
+          }
+        })
+      ])
+    ]));
+  });
+}
+
+document.getElementById('exc-add').addEventListener('click', async () => {
+  const msg = document.getElementById('exc-msg');
+  const typed = document.getElementById('exc-pattern').value.trim();
+  const pattern = typed || document.getElementById('exc-doc').value;
+  if (!pattern) { msg.textContent = 'Укажите документ'; return; }
+  try {
+    await j('/api/admin/exclusions', {
+      method: 'POST',
+      body: JSON.stringify({ pattern, comment: document.getElementById('exc-comment').value })
+    });
+    msg.textContent = 'Исключено: ' + pattern;
+    document.getElementById('exc-pattern').value = '';
+    document.getElementById('exc-comment').value = '';
+    loadExclusions();
+  } catch (err) { msg.textContent = err.message; }
+});
 
 async function loadImages() {
   const data = await j('/api/admin/images');

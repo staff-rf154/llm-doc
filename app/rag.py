@@ -89,7 +89,15 @@ def retrieve(query: str, top_k: int | None = None) -> list[RetrievedChunk]:
             if previous is None or chunk.score > previous.score:
                 merged[key] = chunk
 
-    return sorted(merged.values(), key=lambda c: c.score, reverse=True)[:top_k]
+    ordered = sorted(merged.values(), key=lambda c: c.score, reverse=True)
+    if config.EXCLUSIONS_ENABLED:
+        try:
+            import exclusions
+
+            ordered = exclusions.filter_chunks(ordered)
+        except Exception:
+            pass
+    return ordered[:top_k]
 
 
 def build_prompt(
