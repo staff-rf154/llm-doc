@@ -677,7 +677,18 @@ async function loadRequests() {
       el('div', { className: 'muted', textContent: item.created_at + ' · ' + (item.username || 'гость') + ' · ' + item.latency_ms + ' мс · ' + item.sources + ' источников' }),
       el('div', { className: 'q', textContent: item.question }),
       el('div', { className: 'a', textContent: item.answer }),
-      el('div', {}, [vote, item.corrected ? el('span', { className: 'pill admin', textContent: 'исправленный' }) : document.createTextNode('')]),
+      el('div', {}, [
+        vote,
+        item.corrected ? el('span', { className: 'pill admin', textContent: 'исправленный' }) : document.createTextNode(''),
+        item.correction_id
+          ? el('button', {
+            className: 'pill admin',
+            style: 'cursor:pointer',
+            textContent: 'открыть исправление #' + item.correction_id,
+            onclick: () => jumpToCorrection(item.correction_id)
+          })
+          : document.createTextNode('')
+      ]),
       item.rating_comment ? el('div', { className: 'muted', textContent: 'Комментарий: ' + item.rating_comment }) : document.createTextNode(''),
       el('div', { className: 'row' }, [
         el('button', { textContent: 'Исправить ответ', onclick: () => editAnswer(item) })
@@ -696,10 +707,10 @@ function editAnswer(item) {
   question.value = item.question;
   const docSelect = el('select', { style: 'max-width:320px' });
   const pages = el('input', { placeholder: 'Страницы, например 12-15', style: 'max-width:180px' });
-  const note = el('div', { className: 'muted' });
   const extractBtn = el('button', { textContent: 'Подставить текст страниц' });
   const extractRow = el('div', { className: 'row' }, [docSelect, pages, extractBtn]);
   const saveBtn = el('button', { className: 'primary', textContent: 'Сохранить исправление' });
+  const note = el('div', { className: 'muted' });
 
   fillDocumentSelect(docSelect, item.doc_name || '').then(() => {
     pages.value = item.doc_pages || '';
@@ -734,10 +745,27 @@ function editAnswer(item) {
           doc_pages: docPages
         })
       });
-      note.textContent = 'Сохранено как исправление #' + saved.id + ' (' + saved.doc_ref + ')';
-      loadCorrections();
+      wrap.innerHTML = '';
+      wrap.append(
+        el('div', { className: 'muted' }, [
+          document.createTextNode('Ответ сохранён в исправления: #' + saved.id + ' — ' + saved.doc_ref + '. Урок обучения создан автоматически.')
+        ]),
+        el('div', { className: 'row' }, [
+          el('button', {
+            className: 'primary',
+            textContent: 'Показать в разделе «Исправления»',
+            onclick: () => jumpToCorrection(saved.id)
+          }),
+          el('button', { textContent: 'Закрыть', onclick: () => wrap.remove() })
+        ])
+      );
+      loadRequests();
     } catch (err) { note.textContent = err.message; }
   });
+
+  wrap.append(el('div', { className: 'muted' }, [
+    document.createTextNode('Исправление появится в разделе «Исправления» и будет отдаваться пользователям на этот вопрос.')
+  ]));
 
   wrap.append(question, extractRow, answer, el('div', { className: 'row' }, [
     saveBtn,
@@ -1049,6 +1077,21 @@ function renderLessonDraft(draft) {
     }),
     el('button', { textContent: 'Очистить', onclick: () => { box.innerHTML = ''; } })
   ]));
+}
+
+function jumpToCorrection(correctionId) {
+  document.querySelector('nav button[data-tab="corrections"]').click();
+  loadCorrections().then(() => {
+    const box = document.getElementById('corr-table');
+    const row = Array.from(box.querySelectorAll('tbody tr')).find(
+      tr => tr.firstChild && tr.firstChild.textContent === String(correctionId)
+    );
+    if (!row) return;
+    row.scrollIntoView({ block: 'center' });
+    row.style.outline = '1px solid var(--accent)';
+    row.style.background = 'var(--panel-2)';
+    setTimeout(() => { row.style.outline = ''; row.style.background = ''; }, 4000);
+  });
 }
 
 async function loadTraining() {

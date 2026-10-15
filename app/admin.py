@@ -339,10 +339,14 @@ def requests(
     order: str = "desc",
     user: dict = Depends(auth.require_admin),
 ) -> dict:
+    items = appdb.list_requests(
+        limit=limit, offset=offset, vote=vote, search=search, sort=sort, order=order
+    )
+    by_question = appdb.correction_ids_by_question()
+    for item in items:
+        item["correction_id"] = by_question.get(item["question"].strip().lower())
     return {
-        "items": appdb.list_requests(
-            limit=limit, offset=offset, vote=vote, search=search, sort=sort, order=order
-        ),
+        "items": items,
         "total": appdb.count_requests(vote=vote),
     }
 

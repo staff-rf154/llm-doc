@@ -635,6 +635,16 @@ def set_setting(key: str, value: str) -> str:
     return value
 
 
+def correction_ids_by_question() -> dict[str, int]:
+    """Карта «вопрос в нижнем регистре» -> id исправления."""
+    ensure_schema()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, question FROM corrections WHERE status = 'active'"
+        ).fetchall()
+    return {row["question"].strip().lower(): int(row["id"]) for row in rows if row["question"]}
+
+
 def count_requests(vote: str | None = None) -> int:
     ensure_schema()
     query = """
