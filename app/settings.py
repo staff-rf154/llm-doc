@@ -46,6 +46,7 @@ RETRIEVAL = "Поиск и чанкинг"
 BEHAVIOUR = "Поведение ответа"
 INGEST = "Индексация"
 IMAGES = "Изображения из документации"
+WEBSITES = "Сайты и обход"
 
 PARAMS: list[Param] = [
     Param("LLM_MODEL", "Модель генерации", group=GENERATION,
@@ -78,6 +79,14 @@ PARAMS: list[Param] = [
           hint="Сколько файлов обрабатывается одновременно"),
     Param("INGEST_BATCH_SIZE", "Точек в одном upsert", "int", group=INGEST),
     Param("INGEST_CHECKPOINT_EVERY", "Чанков между срезами", "int", group=INGEST),
+    Param("WEB_CRAWL_MAX_PAGES", "Максимум страниц с одного сайта", "int", group=WEBSITES,
+          hint="Предохранитель: обход остановится, когда лимит исчерпан"),
+    Param("WEB_CRAWL_TIMEOUT", "Таймаут запроса, сек", "int", group=WEBSITES),
+    Param("WEB_CRAWL_DELAY_MS", "Пауза между запросами, мс", "int", group=WEBSITES,
+          hint="Не нагружайте сайт: рекомендуется 500–1000 мс"),
+    Param("WEB_CRAWL_RESPECT_ROBOTS", "Уважать robots.txt", "bool", group=WEBSITES,
+          hint="Отключать только для доверенных сайтов"),
+    Param("WEB_CRAWL_USER_AGENT", "User-Agent обхода", group=WEBSITES),
     Param("IMAGE_SEARCH_ENABLED", "Искать изображения в ответах", "bool", group=IMAGES,
           hint="Прикладывать найденные иллюстрации из документации к ответу"),
     Param("IMAGE_MATCH_THRESHOLD", "Порог релевантности изображения", "float", group=IMAGES,
@@ -249,6 +258,6 @@ def reset(key: str) -> None:
 
 
 def groups() -> list[str]:
-    order = [GENERATION, RETRIEVAL, BEHAVIOUR, IMAGES, INGEST]
+    order = [GENERATION, RETRIEVAL, BEHAVIOUR, WEBSITES, IMAGES, INGEST]
     present = {param.group for param in PARAMS}
     return [group for group in order if group in present]

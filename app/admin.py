@@ -16,6 +16,7 @@ import settings
 import synonymdb
 import vectorstore as vs
 import verify
+import webcrawl
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -590,6 +591,41 @@ def reset_capabilities(user: dict = Depends(auth.require_admin)) -> dict:
         "custom": False,
         "source": "код: app/capabilities.py, константа GROUPS",
     }
+
+
+class SiteCreate(BaseModel):
+    url: str = Field(min_length=3, max_length=300)
+    enabled: bool = True
+    max_pages: int | None = None
+
+
+class SitesUpdate(BaseModel):
+    sites: list[SiteCreate]
+
+
+@router.get("/sites")
+def get_sites(user: dict = Depends(auth.require_admin)) -> dict:
+    return {
+        "sites": webcrawl.sites(),
+        "crawl": webcrawl.job.snapshot(),
+        "respect_robots": config.WEB_CRAWL_RESPECT_ROBOTS,
+        "max_pages": settings.int_value("WEB_CRAWL_MAX_PAGES"),
+    }
+
+
+@router.put("/sites")
+def put_sites(
+    payload: SitesUpdate,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    return {"sites": webcrawl.save_sites([item.model_dump() for item in payload.sites])}
+
+
+@router.post("/sites/start", status_code=202)
+def start_crawl(user: dict = Depends(auth.require_admin)) -> dict:
+    if not webcrawl.sites():
+        raise HTTPException(status_code=400, detail="Список сайтов пуст")
+    return webcrawl.job.start()
 
 
 @router.get("/index")

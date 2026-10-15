@@ -154,6 +154,7 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
                         "score": round(c.score, 4),
                         "citation": c.citation,
                         "text": c.text,
+                        "url": c.url,
                     }
                     for c in chunks
                 ],

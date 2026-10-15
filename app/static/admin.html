@@ -102,6 +102,7 @@
     <button data-tab="corrections">Исправления</button>
     <button data-tab="synonyms">Синонимы</button>
     <button data-tab="exclusions">Исключения</button>
+    <button data-tab="sites">Сайты</button>
     <button data-tab="settings">Настройки</button>
     <button data-tab="index">Индексация</button>
   </nav>
@@ -234,6 +235,37 @@
         <thead><tr><th>Термин</th><th>Синонимы</th><th>Автор</th><th>Изменён</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
+    </div>
+  </section>
+
+  <section id="tab-sites" class="tab hidden">
+    <div class="card">
+      <h2>Сайты для индексации</h2>
+      <div class="muted" style="margin-bottom:12px">
+        Проиндексированные страницы попадают в общий индекс и участвуют в ответах.
+        Обход уважает robots.txt, ограничен тем же доменом и паузой между запросами.
+        Перед обновлением страницы сайтов удаляются, чтобы не копились дубли.
+      </div>
+      <div class="row">
+        <input id="site-url" placeholder="https://example.org" style="max-width:360px">
+        <input id="site-max" type="number" min="0" placeholder="Лимит страниц (0 — общий)" style="max-width:180px">
+        <label class="switch"><input type="checkbox" id="site-enabled" checked><span>Включён</span></label>
+        <button class="primary" id="site-add">Добавить сайт</button>
+        <span class="muted" id="site-msg"></span>
+      </div>
+      <table id="site-table">
+        <thead><tr><th>Адрес</th><th>Состояние</th><th>Лимит страниц</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h2>Обход сайтов</h2>
+      <div class="row">
+        <button class="primary" id="crawl-start">Обойти сайты</button>
+        <span class="muted" id="crawl-state">—</span>
+      </div>
+      <div class="bar"><div id="crawl-bar" style="width:0%"></div></div>
+      <div class="muted" id="crawl-progress"></div>
     </div>
   </section>
 
@@ -379,6 +411,7 @@ function loadTab(tab) {
   if (tab === 'corrections') loadCorrections();
   if (tab === 'synonyms') loadSynonyms();
   if (tab === 'exclusions') loadExclusions();
+  if (tab === 'sites') loadSites();
   if (tab === 'settings') { loadSettings(); loadCapabilities(); loadImages(); }
   if (tab === 'index') loadIndex();
 }
@@ -742,6 +775,99 @@ document.getElementById('exc-parse-add').addEventListener('click', async () => {
     document.getElementById('exc-comment').value = '';
     loadExclusions();
   } catch (err) { msg.textContent = err.message; }
+});
+
+let crawlTimer = null;
+let sitesData = [];
+
+async function loadSites() {
+  const data = await j('/api/admin/sites');
+  sitesData = data.sites || [];
+  const body = document.querySelector('#site-table tbody');
+  while (body.firstChild) body.removeChild(body.firstChild);
+  sitesData.forEach((site, index) => {
+    body.appendChild(el('tr', {}, [
+      el('td', { textContent: site.url }),
+      el('td', { textContent: site.enabled ? 'включён' : 'выключен' }),
+      el('td', { textContent: site.max_pages || 'общий лимит (' + (data.max_pages || 0) + ')' }),
+      el('td', {}, [
+        el('button', {
+          textContent: site.enabled ? 'Выключить' : 'Включить',
+          onclick: () => toggleSite(index, !site.enabled)
+        }),
+        el('button', {
+          className: 'danger',
+          textContent: 'Удалить',
+          onclick: () => toggleSite(index, false, true)
+        })
+      ])
+    ]));
+  });
+  renderCrawl(data.crawl);
+}
+
+async function saveSites(items) {
+  await j('/api/admin/sites', { method: 'PUT', body: JSON.stringify({ sites: items }) });
+  document.getElementById('site-msg').textContent = 'Сохранено';
+  loadSites();
+}
+
+function toggleSite(index, enabled, remove) {
+  const items = sitesData.map((site, i) => {
+    if (i === index) return remove ? null : Object.assign({}, site, { enabled });
+    return site;
+  }).filter(Boolean);
+  saveSites(items);
+}
+
+document.getElementById('site-add').addEventListener('click', () => {
+  const url = document.getElementById('site-url').value.trim();
+  if (!url) return;
+  const maxRaw = document.getElementById('site-max').value.trim();
+  const items = sitesData.concat([{
+    url,
+    enabled: document.getElementById('site-enabled').checked,
+    max_pages: maxRaw ? parseInt(maxRaw, 10) : null
+  }]);
+  document.getElementById('site-url').value = '';
+  document.getElementById('site-max').value = '';
+  saveSites(items);
+});
+
+function renderCrawl(state) {
+  if (!state) return;
+  const line = 'статус: ' + state.status + ' | этап: ' + (state.stage || '—') +
+    ' | страниц: ' + (state.pages || 0) + ' | чанков: ' + (state.chunks || 0) +
+    (state.site ? ' | сайт: ' + state.site : '') +
+    (state.error ? ' | ошибка: ' + state.error : '');
+  document.getElementById('crawl-state').textContent = line;
+  const limit = Math.max(1, (sitesData[0] && sitesData[0].max_pages) || 2000);
+  document.getElementById('crawl-bar').style.width = Math.min(100, Math.round(100 * (state.pages || 0) / limit)) + '%';
+  const errs = (state.errors || []).length
+    ? ' первые ошибки: ' + state.errors.slice(0, 2).join('; ')
+    : '';
+  document.getElementById('crawl-progress').textContent = line + errs;
+  if (state.status === 'running') {
+    if (crawlTimer) clearTimeout(crawlTimer);
+    crawlTimer = setTimeout(async () => {
+      const data = await j('/api/admin/sites');
+      renderCrawl(data.crawl);
+    }, 3000);
+  } else if (crawlTimer) {
+    clearTimeout(crawlTimer);
+    crawlTimer = null;
+  }
+}
+
+document.getElementById('crawl-start').addEventListener('click', async () => {
+  if (!confirm('Обойти сайты? Страницы сайтов в индексе будут заменены.')) return;
+  try {
+    await j('/api/admin/sites/start', { method: 'POST' });
+    document.getElementById('crawl-state').textContent = 'запуск…';
+    loadSites();
+  } catch (err) {
+    document.getElementById('crawl-state').textContent = err.message;
+  }
 });
 
 async function loadCapabilities() {

@@ -14,6 +14,8 @@ class RetrievedChunk:
     source: str
     chunk: int
     score: float
+    url: str = ""
+    title: str = ""
 
     @property
     def citation(self) -> str:
@@ -42,6 +44,7 @@ class Answer:
                     "chunk": c.chunk,
                     "score": round(c.score, 4),
                     "text": c.text,
+                    "url": c.url,
                 }
                 for c in self.chunks
             ],
@@ -83,6 +86,8 @@ def retrieve(query: str, top_k: int | None = None) -> list[RetrievedChunk]:
                 source=payload.get("source", "unknown"),
                 chunk=int(payload.get("chunk", 0)),
                 score=float(point.score),
+                url=payload.get("url", ""),
+                title=payload.get("title", ""),
             )
             key = (chunk.source, chunk.chunk)
             previous = merged.get(key)

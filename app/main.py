@@ -196,7 +196,13 @@ def retrieve(req: RetrieveRequest) -> dict:
     return {
         "query": req.query,
         "results": [
-            {"source": c.source, "chunk": c.chunk, "score": round(c.score, 4), "text": c.text}
+            {
+                "source": c.source,
+                "chunk": c.chunk,
+                "score": round(c.score, 4),
+                "text": c.text,
+                "url": c.url,
+            }
             for c in chunks
         ],
     }

@@ -545,7 +545,17 @@ function renderSources(el, sources) {
     item.className = 'src';
     const meta = document.createElement('div');
     meta.className = 'meta';
-    meta.textContent = s.citation + '  ·  score ' + s.score;
+    if (s.url) {
+      const link = document.createElement('a');
+      link.href = s.url;
+      link.target = '_blank';
+      link.rel = 'noopener';
+      link.textContent = s.url;
+      link.style.color = 'var(--accent)';
+      meta.appendChild(link);
+    } else {
+      meta.textContent = s.citation + '  ·  score ' + s.score;
+    }
     const txt = document.createElement('div');
     txt.className = 'txt';
     txt.textContent = s.text;
