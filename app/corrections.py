@@ -125,6 +125,8 @@ def search(question: str, limit: int = 3) -> list[dict]:
             "doc_name": (p.payload or {}).get("doc_name", ""),
             "doc_pages": (p.payload or {}).get("doc_pages", ""),
             "doc_ref": (p.payload or {}).get("doc_ref", ""),
+            "author": (p.payload or {}).get("author", ""),
+            "updated_at": (p.payload or {}).get("updated_at", ""),
             "score": float(p.score),
         }
         for p in points

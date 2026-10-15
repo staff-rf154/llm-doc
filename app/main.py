@@ -45,6 +45,12 @@ def startup() -> None:
         print(f"терминов в словаре синонимов: {synonyms.seed_if_empty()}")
     except Exception as exc:
         print(f"словарь синонимов недоступен: {exc}")
+    try:
+        import lessons
+
+        print(f"уроков в индексе обучения: {lessons.reindex()}")
+    except Exception as exc:
+        print(f"индекс уроков недоступен: {exc}")
 
 
 class LoginRequest(BaseModel):
@@ -202,6 +208,9 @@ def retrieve(req: RetrieveRequest) -> dict:
                 "score": round(c.score, 4),
                 "text": c.text,
                 "url": c.url,
+                "title": c.title,
+                "page": c.page,
+                "kind": c.kind,
             }
             for c in chunks
         ],

@@ -87,6 +87,37 @@
   .pill.admin { color: var(--accent); border-color: var(--accent); }
   .bar { height: 8px; background: var(--panel-2); border-radius: 999px; overflow: hidden; margin: 4px 0 12px; }
   .bar > div { height: 100%; background: var(--accent); }
+  .train { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; }
+  .train-chat {
+    background: var(--panel-2);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 12px;
+    height: 420px;
+    overflow-y: auto;
+  }
+  .train-msg { margin-bottom: 12px; }
+  .train-msg .who { font-size: 11px; color: var(--muted); margin-bottom: 4px; }
+  .train-msg.user .txt {
+    background: var(--panel);
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    padding: 8px 10px;
+    white-space: pre-wrap;
+  }
+  .train-msg.bot .txt { white-space: pre-wrap; color: var(--text); }
+  #train-input { flex: 1; min-height: 54px; }
+  .lesson {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin-bottom: 8px;
+    background: var(--panel-2);
+  }
+  .lesson .topic { font-weight: 600; margin-bottom: 4px; }
+  .lesson .muted { margin-bottom: 4px; }
+  .lesson .focus { color: var(--accent); }
+  .lesson .row { margin-top: 6px; margin-bottom: 0; }
   .edit { display: grid; gap: 8px; }
   textarea { min-height: 90px; resize: vertical; }
   .hidden { display: none; }
@@ -101,6 +132,7 @@
     <button data-tab="requests">Оценки и правки</button>
     <button data-tab="corrections">Исправления</button>
     <button data-tab="synonyms">Синонимы</button>
+    <button data-tab="train">Обучение</button>
     <button data-tab="exclusions">Исключения</button>
     <button data-tab="settings">Настройки</button>
     <button data-tab="index">Индексация</button>
@@ -234,6 +266,37 @@
         <thead><tr><th>Термин</th><th>Синонимы</th><th>Автор</th><th>Изменён</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
+    </div>
+  </section>
+
+  <section id="tab-train" class="tab hidden">
+    <div class="card">
+      <h2>Обучение ассистента</h2>
+      <div class="muted" style="margin-bottom:10px">
+        Разберите с наставником, как правильно отвечать: в чём ошибка ответа, на какие
+        моменты обращать внимание и как должен звучать правильный ответ. Итог сохраните
+        как урок — он будет подмешиваться в промпт всем пользователям на похожие вопросы.
+      </div>
+      <div class="train">
+        <div class="train-chat" id="train-log"></div>
+        <div class="train-side">
+          <h2>Уроки</h2>
+          <div class="row">
+            <input id="lesson-search" placeholder="Поиск по теме или вопросу" style="max-width:260px">
+            <span class="muted" id="lesson-count"></span>
+          </div>
+          <div id="lesson-list"></div>
+        </div>
+      </div>
+      <form id="train-form" class="row" style="margin-top:12px">
+        <textarea id="train-input" rows="2" placeholder="Например: на вопрос про настройку ICAP ассистент отвечает общо, нужно указать конкретные шаги и страницу документа"></textarea>
+        <button class="primary" id="train-send">Отправить</button>
+      </form>
+      <div class="row">
+        <button id="train-draft">Собрать черновик урока из диалога</button>
+        <span class="muted" id="train-msg"></span>
+      </div>
+      <div id="lesson-draft" class="card" style="background:var(--panel-2)"></div>
     </div>
   </section>
 
@@ -408,6 +471,7 @@ function loadTab(tab) {
   if (tab === 'corrections') loadCorrections();
   if (tab === 'synonyms') loadSynonyms();
   if (tab === 'exclusions') loadExclusions();
+  if (tab === 'train') loadLessons();
   if (tab === 'settings') { loadSettings(); loadCapabilities(); loadImages(); }
   if (tab === 'index') { loadIndex(); loadSites(); }
 }
@@ -865,6 +929,155 @@ document.getElementById('crawl-start').addEventListener('click', async () => {
     document.getElementById('crawl-state').textContent = err.message;
   }
 });
+
+let trainHistory = [];
+let lessonDraft = null;
+
+function trainBubble(role, text) {
+  const box = document.createElement('div');
+  box.className = 'train-msg ' + (role === 'user' ? 'user' : 'bot');
+  const who = document.createElement('div');
+  who.className = 'who';
+  who.textContent = role === 'user' ? 'Вы' : 'Наставник';
+  const txt = document.createElement('div');
+  txt.className = 'txt';
+  txt.textContent = text;
+  box.append(who, txt);
+  document.getElementById('train-log').appendChild(box);
+  document.getElementById('train-log').scrollTop = 1e9;
+}
+
+async function sendTrain() {
+  const input = document.getElementById('train-input');
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = '';
+  document.getElementById('train-msg').textContent = 'наставник думает…';
+  trainBubble('user', text);
+  trainHistory.push({ role: 'user', content: text });
+  try {
+    const data = await j('/api/admin/train/chat', {
+      method: 'POST',
+      body: JSON.stringify({ history: trainHistory.slice(0, -1), question: text })
+    });
+    trainBubble('assistant', data.answer);
+    trainHistory.push({ role: 'assistant', content: data.answer });
+  } catch (err) {
+    document.getElementById('train-msg').textContent = err.message;
+  }
+  document.getElementById('train-msg').textContent = '';
+}
+
+document.getElementById('train-form').addEventListener('submit', e => {
+  e.preventDefault();
+  sendTrain();
+});
+
+document.getElementById('train-draft').addEventListener('click', async () => {
+  const msg = document.getElementById('train-msg');
+  if (!trainHistory.length) { msg.textContent = 'Сначала обсудите вопрос'; return; }
+  msg.textContent = 'формирую черновик…';
+  try {
+    const draft = await j('/api/admin/train/draft', {
+      method: 'POST',
+      body: JSON.stringify({ history: trainHistory, question: 'Собери урок из диалога.' })
+    });
+    lessonDraft = draft;
+    renderLessonDraft(draft);
+    msg.textContent = draft.topic ? 'Черновик готов — проверьте и сохраните' : 'Данных пока недостаточно';
+  } catch (err) { msg.textContent = err.message; }
+});
+
+function renderLessonDraft(draft) {
+  const box = document.getElementById('lesson-draft');
+  while (box.firstChild) box.removeChild(box.firstChild);
+  if (!draft.topic) return;
+  const fields = {};
+  const rows = [
+    ['topic', 'Тема урока'],
+    ['question', 'Вопрос пользователя'],
+    ['answer', 'Правильный ответ'],
+    ['focus', 'На что обратить внимание']
+  ];
+  rows.forEach(([key, label]) => {
+    const input = el(key === 'answer' || key === 'focus' ? 'textarea' : 'input', {
+      id: 'draft-' + key
+    });
+    input.value = draft[key] || '';
+    if (key === 'answer' || key === 'focus') input.style.minHeight = '70px';
+    fields[key] = input;
+    box.append(el('div', { className: 'row', style: 'align-items:flex-start' }, [
+      el('div', { style: 'min-width:180px', className: 'muted' }, [document.createTextNode(label)]),
+      el('div', { style: 'flex:1' }, [input])
+    ]));
+  });
+  box.append(el('div', { className: 'row' }, [
+    el('button', {
+      className: 'primary',
+      textContent: 'Сохранить урок',
+      onclick: async () => {
+        try {
+          await j('/api/admin/lessons', {
+            method: 'POST',
+            body: JSON.stringify({
+              topic: fields.topic.value.trim(),
+              question: fields.question.value.trim(),
+              answer: fields.answer.value.trim(),
+              focus: fields.focus.value.trim()
+            })
+          });
+          document.getElementById('train-msg').textContent = 'Урок сохранён и применён ко всем ответам';
+          box.innerHTML = '';
+          loadLessons();
+        } catch (err) { document.getElementById('train-msg').textContent = err.message; }
+      }
+    }),
+    el('button', { textContent: 'Очистить', onclick: () => { box.innerHTML = ''; } })
+  ]));
+}
+
+async function loadLessons() {
+  const data = await j('/api/admin/lessons');
+  const query = document.getElementById('lesson-search').value.trim().toLowerCase();
+  const items = (data.items || []).filter(item =>
+    !query || item.topic.toLowerCase().includes(query) || item.question.toLowerCase().includes(query));
+  document.getElementById('lesson-count').textContent =
+    'уроков: ' + data.total + ', активных: ' + data.active;
+  const list = document.getElementById('lesson-list');
+  while (list.firstChild) list.removeChild(list.firstChild);
+  items.forEach(item => {
+    list.appendChild(el('div', { className: 'lesson' }, [
+      el('div', { className: 'topic', textContent: item.topic }),
+      item.question ? el('div', { className: 'muted', textContent: 'Вопрос: ' + item.question }) : document.createTextNode(''),
+      el('div', { textContent: item.answer }),
+      item.focus ? el('div', { className: 'focus', textContent: 'Обратить внимание: ' + item.focus }) : document.createTextNode(''),
+      el('div', { className: 'muted', textContent: item.author + ' · ' + item.created_at + ' · применён раз: ' + item.uses + (item.status === 'active' ? '' : ' · выключен') }),
+      el('div', { className: 'row' }, [
+        el('button', {
+          textContent: item.status === 'active' ? 'Выключить' : 'Включить',
+          onclick: async () => {
+            await j('/api/admin/lessons/' + item.id, {
+              method: 'PATCH',
+              body: JSON.stringify({ status: item.status === 'active' ? 'disabled' : 'active' })
+            });
+            loadLessons();
+          }
+        }),
+        el('button', {
+          className: 'danger',
+          textContent: 'Удалить',
+          onclick: async () => {
+            if (!confirm('Удалить урок?')) return;
+            await j('/api/admin/lessons/' + item.id, { method: 'DELETE' });
+            loadLessons();
+          }
+        })
+      ])
+    ]));
+  });
+}
+
+document.getElementById('lesson-search').addEventListener('input', loadLessons);
 
 async function loadCapabilities() {
   const data = await j('/api/admin/capabilities');

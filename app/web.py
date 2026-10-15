@@ -75,6 +75,9 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
             "doc_name": exact.get("doc_name", ""),
             "doc_pages": exact.get("doc_pages", ""),
             "doc_ref": exact.get("doc_ref", ""),
+            "author": exact.get("author", ""),
+            "updated_at": exact.get("updated_at", ""),
+            "correction_id": exact.get("correction_id", 0),
         }
         request_id = appdb.log_request(
             user, question, exact["answer"], True, True, 0,
@@ -155,6 +158,9 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
                         "citation": c.citation,
                         "text": c.text,
                         "url": c.url,
+                        "title": c.title,
+                        "page": c.page,
+                        "kind": c.kind,
                     }
                     for c in chunks
                 ],

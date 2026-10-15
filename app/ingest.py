@@ -4,6 +4,7 @@ import uuid
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import quote
 from typing import Callable
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -13,7 +14,7 @@ import config
 import index_state
 import settings
 import vectorstore as vs
-from loaders import iter_documents, load_file
+from loaders import iter_documents, load_document
 
 
 def split_text(text: str) -> list[str]:
@@ -26,16 +27,50 @@ def split_text(text: str) -> list[str]:
     return [c.strip() for c in splitter.split_text(text) if c.strip()]
 
 
-def chunk_points(rel: str, chunks: list[str]) -> list[dict]:
+DOCS_BASE_URL = "https://docs.example.org/"
+
+
+def chunk_points(
+    rel: str,
+    chunks: list[str],
+    pages: list[int] | None = None,
+    title: str = "",
+) -> list[dict]:
     return [
         {
             "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{rel}:{index}")),
             "text": chunk,
             "source": rel,
             "chunk": index,
+            "page": (pages[index] if pages and index < len(pages) else 0),
+            "title": title,
+            "kind": "file",
         }
         for index, chunk in enumerate(chunks)
     ]
+
+
+def split_with_pages(document: dict) -> tuple[list[str], list[int]]:
+    """Чанки постранично: каждый чанк знает, с какой страницы он взят."""
+    chunks: list[str] = []
+    pages: list[int] = []
+    for number, page_text in enumerate(document.get("pages") or [], start=1):
+        if not page_text or not page_text.strip():
+            continue
+        for chunk in split_text(page_text):
+            chunks.append(chunk)
+            pages.append(number)
+    return chunks, pages
+
+
+def origin_url(rel: str) -> str:
+    """Ссылка на оригинал документа на docs.example.org, если он оттуда."""
+    name = Path(rel).name
+    return f"{DOCS_BASE_URL}{quote(name)}"
+
+
+def document_kind(rel: str) -> str:
+    return "file"
 
 
 def plan_files() -> list[tuple[str, Path, str]]:
@@ -64,6 +99,10 @@ def upsert_batch(client, collection: str, batch: list[dict]) -> None:
                     "text": p["text"],
                     "source": p["source"],
                     "chunk": p["chunk"],
+                    "page": p.get("page", 0),
+                    "title": p.get("title", ""),
+                    "kind": p.get("kind", "file"),
+                    "url": p.get("url", "") or origin_url(p["source"]),
                 },
             )
             for p, vector in zip(batch, vectors)
@@ -75,12 +114,12 @@ def upsert_batch(client, collection: str, batch: list[dict]) -> None:
 def collect_chunks() -> list[dict]:
     points: list[dict] = []
     for root, path, rel in plan_files():
-        text = load_file(path)
-        if not text:
+        document = load_document(path)
+        if not document["text"]:
             print(f"skip empty: {path}")
             continue
-        chunks = split_text(text)
-        points.extend(chunk_points(rel, chunks))
+        chunks, pages = split_with_pages(document)
+        points.extend(chunk_points(rel, chunks, pages, document.get("title", "")))
         print(f"{rel}: {len(chunks)} chunks")
     return points
 
@@ -262,11 +301,16 @@ def reindex(
         try:
             stat = path.stat()
             prev = index_state.get_file_progress(collection, source_key)
-            text = load_file(path)
+            document = load_document(path)
+            text = document["text"]
             if not text:
                 print(f"skip empty: {path}")
                 return
-            points = chunk_points(rel, split_text(text))
+            chunks, pages = split_with_pages(document)
+            if not chunks:
+                print(f"skip empty: {path}")
+                return
+            points = chunk_points(rel, chunks, pages, document.get("title", ""))
 
             start_at = 0
             have = already.get(rel, set())

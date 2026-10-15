@@ -12,6 +12,7 @@ import docpages
 import exclusions
 import images
 import ingest
+import lessons
 import settings
 import synonymdb
 import vectorstore as vs
@@ -60,6 +61,109 @@ class PageExtractRequest(BaseModel):
 
 class SettingsUpdate(BaseModel):
     title: str = Field(min_length=1, max_length=200)
+
+
+class TrainTurn(BaseModel):
+    role: str = Field(pattern="^(user|assistant)$")
+    content: str
+
+
+class TrainRequest(BaseModel):
+    history: list[TrainTurn] = Field(default_factory=list)
+    question: str = Field(min_length=1)
+
+
+class LessonCreate(BaseModel):
+    topic: str = Field(min_length=2, max_length=200)
+    question: str = ""
+    answer: str = Field(min_length=2)
+    focus: str = ""
+
+
+class LessonUpdate(BaseModel):
+    topic: str | None = None
+    question: str | None = None
+    answer: str | None = None
+    focus: str | None = None
+    status: str | None = Field(default=None, pattern="^(active|disabled)$")
+
+
+@router.post("/train/chat")
+def train_chat(
+    payload: TrainRequest,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    history = [turn.model_dump() for turn in payload.history]
+    try:
+        answer = lessons.chat(history, payload.question)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"LLM error: {exc}") from exc
+    return {"answer": answer}
+
+
+@router.post("/train/draft")
+def train_draft(
+    payload: TrainRequest,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    history = [turn.model_dump() for turn in payload.history]
+    history.append({"role": "user", "content": payload.question})
+    try:
+        draft = lessons.draft(history)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"LLM error: {exc}") from exc
+    return draft
+
+
+@router.get("/lessons")
+def list_lessons(user: dict = Depends(auth.require_admin)) -> dict:
+    items = appdb.list_lessons()
+    return {
+        "items": items,
+        "total": len(items),
+        "active": len([item for item in items if item["status"] == "active"]),
+    }
+
+
+@router.post("/lessons", status_code=201)
+def create_lesson(
+    payload: LessonCreate,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    return lessons.save_lesson(
+        payload.topic,
+        payload.question,
+        payload.answer,
+        payload.focus,
+        user["username"],
+    )
+
+
+@router.patch("/lessons/{lesson_id}")
+def update_lesson(
+    lesson_id: int,
+    payload: LessonUpdate,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    if not appdb.get_lesson(lesson_id):
+        raise HTTPException(status_code=404, detail="Урок не найден")
+    appdb.update_lesson(lesson_id, **payload.model_dump(exclude_none=True))
+    lessons.reindex()
+    return appdb.get_lesson(lesson_id) or {}
+
+
+@router.delete("/lessons/{lesson_id}")
+def delete_lesson(lesson_id: int, user: dict = Depends(auth.require_admin)) -> dict:
+    if not appdb.delete_lesson(lesson_id):
+        raise HTTPException(status_code=404, detail="Урок не найден")
+    lessons.reindex()
+    return {"ok": True}
+
+
+@router.get("/lessons/check")
+def check_lessons(q: str, user: dict = Depends(auth.require_admin)) -> dict:
+    """Показать, какие уроки сработают на этот вопрос."""
+    return {"query": q, "lessons": lessons.relevant(q)}
 
 
 @router.get("/settings")

@@ -47,6 +47,7 @@ BEHAVIOUR = "Поведение ответа"
 INGEST = "Индексация"
 IMAGES = "Изображения из документации"
 WEBSITES = "Сайты и обход"
+LESSONS = "Обучение"
 
 PARAMS: list[Param] = [
     Param("LLM_MODEL", "Модель генерации", group=GENERATION,
@@ -79,6 +80,11 @@ PARAMS: list[Param] = [
           hint="Сколько файлов обрабатывается одновременно"),
     Param("INGEST_BATCH_SIZE", "Точек в одном upsert", "int", group=INGEST),
     Param("INGEST_CHECKPOINT_EVERY", "Чанков между срезами", "int", group=INGEST),
+    Param("LESSONS_MAX", "Уроков в промпте ответа", "int", group=LESSONS,
+          hint="Сколько релевантных уроков администратора подмешивается в ответ"),
+    Param("LESSONS_MIN_SCORE", "Порог релевантности урока", "float", group=LESSONS,
+          hint="Ниже порога урок в ответ не попадает"),
+    Param("LESSONS_COLLECTION", "Коллекция уроков", group=LESSONS),
     Param("WEB_CRAWL_MAX_PAGES", "Максимум страниц с одного сайта", "int", group=WEBSITES,
           hint="Предохранитель: обход остановится, когда лимит исчерпан"),
     Param("WEB_CRAWL_TIMEOUT", "Таймаут запроса, сек", "int", group=WEBSITES),
@@ -258,6 +264,6 @@ def reset(key: str) -> None:
 
 
 def groups() -> list[str]:
-    order = [GENERATION, RETRIEVAL, BEHAVIOUR, WEBSITES, IMAGES, INGEST]
+    order = [GENERATION, RETRIEVAL, BEHAVIOUR, LESSONS, WEBSITES, IMAGES, INGEST]
     present = {param.group for param in PARAMS}
     return [group for group in order if group in present]

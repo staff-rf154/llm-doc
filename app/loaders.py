@@ -56,6 +56,45 @@ def load_file(path: Path) -> str:
     return _normalize(reader(path))
 
 
+def load_document(path: Path) -> dict:
+    """Документ с разбивкой по страницам и заголовком из метаданных.
+
+    Возвращает title, pages (текст по страницам, для не-PDF — одна условная
+    страница) и text (весь текст сразу).
+    """
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
+        return _read_pdf_document(path)
+    text = load_file(path)
+    return {"title": "", "pages": [text] if text else [], "text": text}
+
+
+def _read_pdf_document(path: Path) -> dict:
+    reader = PdfReader(str(path))
+    pages: list[str] = []
+    for number, page in enumerate(reader.pages, start=1):
+        try:
+            pages.append(_normalize(page.extract_text() or ""))
+        except Exception:
+            pages.append("")
+    title = ""
+    try:
+        meta_title = (reader.metadata.title or "").strip()
+        title = meta_title if meta_title.lower() not in (path.stem.lower(), "") else ""
+    except Exception:
+        title = ""
+    if not title:
+        for candidate in pages[:2]:
+            for line in candidate.splitlines():
+                clean = line.strip()
+                if 4 <= len(clean) <= 120:
+                    title = clean
+                    break
+            if title:
+                break
+    return {"title": title, "pages": pages, "text": "\n".join(pages)}
+
+
 def iter_documents(root: str):
     root_path = Path(root)
     if not root_path.exists():

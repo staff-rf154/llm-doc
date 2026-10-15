@@ -113,8 +113,38 @@
     white-space: pre-wrap;
     max-height: 130px;
     overflow: hidden;
+    position: relative;
   }
   .src.open .txt { max-height: none; }
+  .src-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 6px;
+  }
+  .src-title { font-size: 13px; color: var(--text); font-weight: 500; }
+  .src-tags { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 6px; }
+  .tag {
+    font-size: 11px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 8px;
+    color: var(--muted);
+  }
+  .tag.high { color: var(--ok); border-color: var(--ok); }
+  .tag.mid { color: var(--warn); border-color: var(--warn); }
+  .tag.low { color: var(--muted); }
+  .tag.web { color: var(--accent); border-color: var(--accent); }
+  .src-more {
+    font-size: 11px;
+    color: var(--accent);
+    background: none;
+    border: none;
+    padding: 4px 0 0;
+    cursor: pointer;
+  }
+  .ref-meta { font-size: 11px; color: var(--muted); margin-top: 2px; }
   .cursor { display: inline-block; width: 7px; background: var(--accent); animation: b 1s steps(2) infinite; }
   @keyframes b { 50% { opacity: 0 } }
   footer {
@@ -536,31 +566,74 @@ function buildRate(box, requestId) {
   box.append(up, down, comment, sendComment, note);
 }
 
+function scoreTag(score) {
+  if (score >= 0.85) return { text: 'высокая релевантность', cls: 'high' };
+  if (score >= 0.7) return { text: 'средняя релевантность', cls: 'mid' };
+  return { text: 'низкая релевантность', cls: 'low' };
+}
+
+function sourceTitle(s) {
+  if (s.title) return s.title;
+  const name = (s.source || '').split('/').pop();
+  return name.replace(/\.[a-z0-9]+$/i, '').replace(/_/g, ' ');
+}
+
 function renderSources(el, sources) {
   if (!sources.length) return;
   const summary = document.createElement('summary');
-  summary.textContent = 'Источники (' + sources.length + ')';
+  summary.textContent = 'Источники (' + sources.length + ') · подробнее';
   const items = sources.map(s => {
     const item = document.createElement('div');
     item.className = 'src';
+
+    const head = document.createElement('div');
+    head.className = 'src-head';
+    const title = document.createElement('span');
+    title.className = 'src-title';
+    title.textContent = sourceTitle(s);
+    head.appendChild(title);
+
+    const tags = document.createElement('div');
+    tags.className = 'src-tags';
+    const rel = scoreTag(s.score);
+    const score = el_tag('tag ' + rel.cls, rel.text + ' · ' + s.score);
+    tags.appendChild(score);
+    tags.appendChild(el_tag('tag', s.kind === 'web' ? 'страница сайта' : 'документация'));
+    if (s.page) tags.appendChild(el_tag('tag', 'с. ' + s.page));
+    else if (s.kind !== 'web') tags.appendChild(el_tag('tag', 'страница не определена'));
+    if (s.url) {
+      const link = el_tag('tag web', 'открыть оригинал');
+      link.style.cursor = 'pointer';
+      link.addEventListener('click', e => {
+        e.stopPropagation();
+        window.open(s.url, '_blank', 'noopener');
+      });
+      tags.appendChild(link);
+    }
+    head.appendChild(tags);
+
     const meta = document.createElement('div');
     meta.className = 'meta';
-    if (s.url) {
-      const link = document.createElement('a');
-      link.href = s.url;
-      link.target = '_blank';
-      link.rel = 'noopener';
-      link.textContent = s.url;
-      link.style.color = 'var(--accent)';
-      meta.appendChild(link);
-    } else {
-      meta.textContent = s.citation + '  ·  score ' + s.score;
-    }
+    meta.textContent = s.citation;
+
     const txt = document.createElement('div');
     txt.className = 'txt';
     txt.textContent = s.text;
-    item.append(meta, txt);
-    item.addEventListener('click', () => item.classList.toggle('open'));
+
+    const more = document.createElement('button');
+    more.className = 'src-more';
+    more.textContent = 'Показать полностью';
+    more.addEventListener('click', e => {
+      e.stopPropagation();
+      const open = item.classList.toggle('open');
+      more.textContent = open ? 'Свернуть' : 'Показать полностью';
+    });
+
+    item.append(head, meta, txt, more);
+    item.addEventListener('click', () => {
+      const open = item.classList.toggle('open');
+      more.textContent = open ? 'Свернуть' : 'Показать полностью';
+    });
     return item;
   });
   while (el.firstChild) el.removeChild(el.firstChild);
@@ -598,6 +671,13 @@ function openLightbox(item) {
   }
   box.querySelector('img').src = item.url;
   box.hidden = false;
+}
+
+function el_tag(className, text) {
+  const node = document.createElement('span');
+  node.className = className;
+  node.textContent = text;
+  return node;
 }
 
 function renderSuggestions(items) {
@@ -686,6 +766,13 @@ async function ask(question) {
               ui.reference.appendChild(link);
             } else {
               ui.reference.appendChild(document.createTextNode(label));
+            if (event.data.author || event.data.updated_at) {
+              const meta = document.createElement('div');
+              meta.className = 'ref-meta';
+              meta.textContent = 'Исправил: ' + (event.data.author || 'администратор') +
+                (event.data.updated_at ? ' · ' + event.data.updated_at : '');
+              ui.reference.appendChild(meta);
+            }
             }
           }
         } else if (event.type === 'request') {

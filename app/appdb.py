@@ -82,6 +82,19 @@ CREATE TABLE IF NOT EXISTS exclusions (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_exclusions_pattern ON exclusions(pattern);
+CREATE TABLE IF NOT EXISTS lessons (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    topic TEXT NOT NULL,
+    question TEXT NOT NULL DEFAULT '',
+    answer TEXT NOT NULL DEFAULT '',
+    focus TEXT NOT NULL DEFAULT '',
+    author TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'active',
+    uses INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_lessons_status ON lessons(status);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -475,6 +488,73 @@ def find_source_name(pattern: str) -> str:
     return ""
 
 
+def create_lesson(
+    topic: str,
+    question: str,
+    answer: str,
+    focus: str,
+    author: str,
+) -> dict:
+    ensure_schema()
+    with _LOCK, connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO lessons (topic, question, answer, focus, author, status, uses,
+                                 created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, 'active', 0, ?, ?)
+            """,
+            (topic, question, answer, focus, author, now(), now()),
+        )
+        lesson_id = int(cur.lastrowid)
+    return get_lesson(lesson_id) or {}
+
+
+def get_lesson(lesson_id: int) -> dict | None:
+    ensure_schema()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM lessons WHERE id = ?", (lesson_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def list_lessons(status: str | None = None) -> list[dict]:
+    ensure_schema()
+    query = "SELECT * FROM lessons"
+    params: list = []
+    if status:
+        query += " WHERE status = ?"
+        params.append(status)
+    query += " ORDER BY id DESC"
+    with connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def update_lesson(lesson_id: int, **fields) -> None:
+    ensure_schema()
+    allowed = ("topic", "question", "answer", "focus", "status")
+    sets = [f"{key} = ?" for key, value in fields.items() if key in allowed and value is not None]
+    if not sets:
+        return
+    params = [value for key, value in fields.items() if key in allowed and value is not None]
+    sets.append("updated_at = ?")
+    params.extend([now(), lesson_id])
+    with _LOCK, connect() as conn:
+        conn.execute(f"UPDATE lessons SET {', '.join(sets)} WHERE id = ?", params)
+
+
+def delete_lesson(lesson_id: int) -> bool:
+    ensure_schema()
+    with _LOCK, connect() as conn:
+        cur = conn.execute("DELETE FROM lessons WHERE id = ?", (lesson_id,))
+    return bool(cur.rowcount)
+
+
+def count_uses(lesson_id: int) -> None:
+    ensure_schema()
+    with _LOCK, connect() as conn:
+        conn.execute("UPDATE lessons SET uses = uses + 1 WHERE id = ?", (lesson_id,))
+
+
 def get_setting(key: str, default: str = "") -> str:
     ensure_schema()
     with connect() as conn:
@@ -729,6 +809,7 @@ def summary() -> dict:
                 (SELECT COUNT(*) FROM requests) AS requests,
                 (SELECT COUNT(*) FROM ratings WHERE vote = 'up') AS likes,
                 (SELECT COUNT(*) FROM ratings WHERE vote = 'down') AS dislikes,
+                (SELECT COUNT(*) FROM lessons WHERE status = 'active') AS lessons,
                 (SELECT COUNT(*) FROM corrections) AS corrections,
                 (SELECT COUNT(*) FROM corrections WHERE status = 'active') AS active_corrections
             """

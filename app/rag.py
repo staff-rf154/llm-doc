@@ -16,6 +16,8 @@ class RetrievedChunk:
     score: float
     url: str = ""
     title: str = ""
+    page: int = 0
+    kind: str = "file"
 
     @property
     def citation(self) -> str:
@@ -45,6 +47,9 @@ class Answer:
                     "score": round(c.score, 4),
                     "text": c.text,
                     "url": c.url,
+                    "title": c.title,
+                    "page": c.page,
+                    "kind": c.kind,
                 }
                 for c in self.chunks
             ],
@@ -88,6 +93,8 @@ def retrieve(query: str, top_k: int | None = None) -> list[RetrievedChunk]:
                 score=float(point.score),
                 url=payload.get("url", ""),
                 title=payload.get("title", ""),
+                page=int(payload.get("page", 0) or 0),
+                kind=payload.get("kind", "file") or "file",
             )
             key = (chunk.source, chunk.chunk)
             previous = merged.get(key)
@@ -113,6 +120,12 @@ def build_prompt(
     blocks = []
     for chunk in chunks:
         blocks.append(f"<fragment id=\"{chunk.citation}\">\n{chunk.text}\n</fragment>")
+    lessons = lesson_examples(question)
+    blocks_lessons = ""
+    if lessons:
+        import lessons as lessons_mod
+
+        blocks_lessons = lessons_mod.as_prompt_block(lessons) + "\n\n"
     head = ""
     if examples:
         samples = "\n\n".join(
@@ -121,7 +134,9 @@ def build_prompt(
         )
         head = f"Примеры исправленных ответов, учти их стиль и точность:\n\n{samples}\n\n"
     return (
-        f"Документация:\n\n" + "\n\n".join(blocks) + f"\n\n{head}Вопрос: {question}"
+        f"Документация:\n\n"
+        + "\n\n".join(blocks)
+        + f"\n\n{blocks_lessons}{head}Вопрос: {question}"
     )
 
 
@@ -167,6 +182,15 @@ def find_correction(question: str) -> dict | None:
     except Exception:
         return None
 
+def lesson_examples(question: str) -> list[dict]:
+    try:
+        import lessons
+
+        return lessons.relevant(question)
+    except Exception:
+        return []
+
+
 def correction_examples(question: str) -> list[dict]:
     try:
         import corrections
@@ -192,6 +216,9 @@ def ask(question: str, top_k: int | None = None) -> Answer:
                 "doc_name": exact.get("doc_name", ""),
                 "doc_pages": exact.get("doc_pages", ""),
                 "doc_ref": exact.get("doc_ref", ""),
+                "author": exact.get("author", ""),
+                "updated_at": exact.get("updated_at", ""),
+                "correction_id": exact.get("correction_id", 0),
             },
         )
 
