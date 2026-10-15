@@ -95,6 +95,17 @@ CREATE TABLE IF NOT EXISTS lessons (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_lessons_status ON lessons(status);
+CREATE TABLE IF NOT EXISTS training_log (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    source TEXT NOT NULL DEFAULT 'correction',
+    correction_id INTEGER,
+    lesson_id INTEGER,
+    status TEXT NOT NULL DEFAULT 'pending',
+    note TEXT NOT NULL DEFAULT '',
+    author TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_training_log_created ON training_log(created_at);
 CREATE TABLE IF NOT EXISTS settings (
     key TEXT PRIMARY KEY,
     value TEXT NOT NULL,
@@ -553,6 +564,50 @@ def count_uses(lesson_id: int) -> None:
     ensure_schema()
     with _LOCK, connect() as conn:
         conn.execute("UPDATE lessons SET uses = uses + 1 WHERE id = ?", (lesson_id,))
+
+
+def add_training_log(
+    source: str,
+    correction_id: int | None,
+    lesson_id: int | None,
+    status: str,
+    note: str = "",
+    author: str = "",
+) -> int:
+    ensure_schema()
+    with _LOCK, connect() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO training_log
+                (source, correction_id, lesson_id, status, note, author, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (source, correction_id, lesson_id, status, note[:300], author, now()),
+        )
+        return int(cur.lastrowid)
+
+
+def update_training_log(log_id: int, status: str, lesson_id: int | None = None, note: str = "") -> None:
+    ensure_schema()
+    with _LOCK, connect() as conn:
+        conn.execute(
+            "UPDATE training_log SET status = ?, lesson_id = COALESCE(?, lesson_id), note = ? WHERE id = ?",
+            (status, lesson_id, note[:300], log_id),
+        )
+
+
+def list_training_log(limit: int = 30) -> list[dict]:
+    ensure_schema()
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT t.*, c.doc_ref, c.question AS correction_question
+            FROM training_log t LEFT JOIN corrections c ON c.id = t.correction_id
+            ORDER BY t.id DESC LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
 
 
 def get_setting(key: str, default: str = "") -> str:

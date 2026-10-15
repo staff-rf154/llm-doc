@@ -298,6 +298,21 @@
       </div>
       <div id="lesson-draft" class="card" style="background:var(--panel-2)"></div>
     </div>
+    <div class="card">
+      <h2>Автообучение из исправлений</h2>
+      <div class="muted" style="margin-bottom:10px">
+        Каждое исправление ответа, сохранённое администратором, уходит наставнику и
+        превращается в урок. Здесь видно, что произошло с последними исправлениями.
+      </div>
+      <div class="row">
+        <button id="training-run">Обучить по всем активным исправлениям</button>
+        <span class="muted" id="training-state">—</span>
+      </div>
+      <table id="training-table">
+        <thead><tr><th>Источник</th><th>Вопрос</th><th>Ссылка</th><th>Тема урока</th><th>Статус</th><th>Когда</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </section>
 
   <section id="tab-exclusions" class="tab hidden">
@@ -471,7 +486,7 @@ function loadTab(tab) {
   if (tab === 'corrections') loadCorrections();
   if (tab === 'synonyms') loadSynonyms();
   if (tab === 'exclusions') loadExclusions();
-  if (tab === 'train') loadLessons();
+  if (tab === 'train') { loadLessons(); loadTraining(); }
   if (tab === 'settings') { loadSettings(); loadCapabilities(); loadImages(); }
   if (tab === 'index') { loadIndex(); loadSites(); }
 }
@@ -1035,6 +1050,33 @@ function renderLessonDraft(draft) {
     el('button', { textContent: 'Очистить', onclick: () => { box.innerHTML = ''; } })
   ]));
 }
+
+async function loadTraining() {
+  const data = await j('/api/admin/training/log');
+  const job = data.job || {};
+  document.getElementById('training-state').textContent =
+    'обучений в очереди: ' + (job.done || 0) + '/' + (job.total || 0) +
+    (job.error ? ' | ошибка: ' + job.error : '');
+  const body = document.querySelector('#training-table tbody');
+  while (body.firstChild) body.removeChild(body.firstChild);
+  (data.items || []).forEach(item => {
+    body.appendChild(el('tr', {}, [
+      el('td', { textContent: item.source === 'correction' ? 'исправление #' + item.correction_id : item.source }),
+      el('td', { textContent: item.correction_question || '—' }),
+      el('td', { textContent: item.doc_ref || '—' }),
+      el('td', { textContent: item.note || '—' }),
+      el('td', { textContent: item.status }),
+      el('td', { textContent: item.created_at })
+    ]));
+  });
+}
+
+document.getElementById('training-run').addEventListener('click', async () => {
+  if (!confirm('Отправить все активные исправления на обучение?')) return;
+  const res = await j('/api/admin/training/run', { method: 'POST' });
+  document.getElementById('training-state').textContent = 'в очереди: ' + res.queued;
+  setTimeout(loadTraining, 2000);
+});
 
 async function loadLessons() {
   const data = await j('/api/admin/lessons');

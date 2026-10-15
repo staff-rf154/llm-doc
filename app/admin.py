@@ -160,6 +160,24 @@ def delete_lesson(lesson_id: int, user: dict = Depends(auth.require_admin)) -> d
     return {"ok": True}
 
 
+@router.get("/training/log")
+def training_log(user: dict = Depends(auth.require_admin)) -> dict:
+    return {
+        "items": appdb.list_training_log(),
+        "job": lessons.learn_job.snapshot(),
+    }
+
+
+@router.post("/training/run")
+def training_run(user: dict = Depends(auth.require_admin)) -> dict:
+    """Отправить все исправления на обучение (повторно)."""
+    queued = 0
+    for correction in appdb.list_corrections(status="active"):
+        lessons.learn_job.queue(correction, user["username"])
+        queued += 1
+    return {"queued": queued}
+
+
 @router.get("/lessons/check")
 def check_lessons(q: str, user: dict = Depends(auth.require_admin)) -> dict:
     """Показать, какие уроки сработают на этот вопрос."""
@@ -382,6 +400,8 @@ def create_correction(
         docpages.build_reference(payload.doc_name, pages),
     )
     corrections.reindex()
+    if config.TRAINING_FROM_CORRECTIONS:
+        lessons.learn_job.queue(item, user["username"])
     return item
 
 
@@ -417,7 +437,10 @@ def update_correction(
         doc_ref=docpages.build_reference(doc_name, doc_pages),
     )
     corrections.reindex()
-    return appdb.get_correction(correction_id) or {}
+    updated = appdb.get_correction(correction_id) or {}
+    if config.TRAINING_FROM_CORRECTIONS and updated:
+        lessons.learn_job.queue(updated, user["username"])
+    return updated
 
 
 @router.delete("/corrections/{correction_id}")

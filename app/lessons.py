@@ -288,3 +288,122 @@ _cache: dict = {"at": 0.0, "value": None}
 
 def invalidate() -> None:
     _cache.update(at=0.0, value=None)
+
+CORRECTION_DIALOG = """Пользователь спросил: «{question}»
+
+Администратор ответил так:
+{answer}
+
+Источник: {source}
+"""
+
+
+def _same_lesson(question: str) -> dict | None:
+    target = (question or "").strip().lower()
+    if not target:
+        return None
+    for item in appdb.list_lessons(status="active"):
+        if item["question"].strip().lower() == target:
+            return item
+    return None
+
+
+def learn_from_correction(correction: dict, author: str) -> dict:
+    """Собрать или обновить урок на основе исправления администратора."""
+    existing = _same_lesson(correction.get("question", ""))
+    if existing:
+        appdb.update_lesson(
+            existing["id"],
+            topic=(correction.get("question") or existing["topic"])[:80],
+            question=correction.get("question") or existing["question"],
+            answer=correction.get("answer") or existing["answer"],
+            focus=correction.get("doc_ref") or existing["focus"],
+        )
+        reindex()
+        return appdb.get_lesson(existing["id"]) or {}
+
+    dialog = CORRECTION_DIALOG.format(
+        question=correction.get("question", ""),
+        answer=correction.get("answer", ""),
+        source=correction.get("doc_ref") or "документ и страницы не указаны",
+    )
+    client = rag.get_client()
+    completion = client.chat.completions.create(
+        model=_model(),
+        messages=[
+            {"role": "system", "content": TRAINER_SYSTEM},
+            {"role": "user", "content": f"{DRAFT_PROMPT}\n\nДиалог:\n{dialog}"},
+        ],
+        temperature=0.1,
+    )
+    draft = parse_draft((completion.choices[0].message.content or "").strip())
+    if not draft["topic"]:
+        draft = {
+            "topic": (correction.get("question") or "Исправление администратора")[:80],
+            "question": correction.get("question", ""),
+            "answer": correction.get("answer", ""),
+            "focus": "",
+        }
+    if not draft["focus"]:
+        draft["focus"] = correction.get("doc_ref", "")
+    return save_lesson(
+        draft["topic"], draft["question"], draft["answer"], draft["focus"], author
+    )
+
+
+class LearnJob:
+    """Фоновое обучение на основе исправлений администратора."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._thread: threading.Thread | None = None
+        self.state: dict = {
+            "status": "idle",
+            "done": 0,
+            "total": 0,
+            "created": 0,
+            "error": None,
+        }
+
+    def snapshot(self) -> dict:
+        with self._lock:
+            return dict(self.state)
+
+    def queue(self, correction: dict, author: str) -> int:
+        log_id = appdb.add_training_log(
+            source="correction",
+            correction_id=int(correction["id"]),
+            lesson_id=None,
+            status="pending",
+            author=author,
+        )
+        with self._lock:
+            self.state = {
+                "status": "running",
+                "done": 0,
+                "total": self.state.get("total", 0) + 1,
+                "created": 0,
+                "error": None,
+            }
+        thread = threading.Thread(target=self._run, args=(log_id, correction, author), daemon=True)
+        thread.start()
+        self._thread = thread
+        return log_id
+
+    def _run(self, log_id: int, correction: dict, author: str) -> None:
+        try:
+            lesson = learn_from_correction(correction, author)
+            appdb.update_training_log(
+                log_id, "done", lesson_id=int(lesson["id"]), note=lesson["topic"]
+            )
+            with self._lock:
+                self.state["done"] += 1
+                self.state["created"] += 1
+        except Exception as exc:
+            appdb.update_training_log(log_id, "error", note=f"{type(exc).__name__}: {exc}")
+            with self._lock:
+                self.state["done"] += 1
+                self.state["error"] = f"{type(exc).__name__}: {exc}"
+
+
+learn_job = LearnJob()
