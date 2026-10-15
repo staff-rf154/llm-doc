@@ -102,7 +102,6 @@
     <button data-tab="corrections">Исправления</button>
     <button data-tab="synonyms">Синонимы</button>
     <button data-tab="exclusions">Исключения</button>
-    <button data-tab="sites">Сайты</button>
     <button data-tab="settings">Настройки</button>
     <button data-tab="index">Индексация</button>
   </nav>
@@ -238,37 +237,6 @@
     </div>
   </section>
 
-  <section id="tab-sites" class="tab hidden">
-    <div class="card">
-      <h2>Сайты для индексации</h2>
-      <div class="muted" style="margin-bottom:12px">
-        Проиндексированные страницы попадают в общий индекс и участвуют в ответах.
-        Обход уважает robots.txt, ограничен тем же доменом и паузой между запросами.
-        Перед обновлением страницы сайтов удаляются, чтобы не копились дубли.
-      </div>
-      <div class="row">
-        <input id="site-url" placeholder="https://example.org" style="max-width:360px">
-        <input id="site-max" type="number" min="0" placeholder="Лимит страниц (0 — общий)" style="max-width:180px">
-        <label class="switch"><input type="checkbox" id="site-enabled" checked><span>Включён</span></label>
-        <button class="primary" id="site-add">Добавить сайт</button>
-        <span class="muted" id="site-msg"></span>
-      </div>
-      <table id="site-table">
-        <thead><tr><th>Адрес</th><th>Состояние</th><th>Лимит страниц</th><th></th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </div>
-    <div class="card">
-      <h2>Обход сайтов</h2>
-      <div class="row">
-        <button class="primary" id="crawl-start">Обойти сайты</button>
-        <span class="muted" id="crawl-state">—</span>
-      </div>
-      <div class="bar"><div id="crawl-bar" style="width:0%"></div></div>
-      <div class="muted" id="crawl-progress"></div>
-    </div>
-  </section>
-
   <section id="tab-exclusions" class="tab hidden">
     <div class="card">
       <h2>Исключить документ из ответов</h2>
@@ -371,6 +339,35 @@
       <div class="bar"><div id="idx-bar" style="width:0%"></div></div>
       <div class="muted" id="idx-progress"></div>
     </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>Сайты для индексации</h2>
+      <div class="muted" style="margin-bottom:12px">
+        Проиндексированные страницы попадают в общий индекс и участвуют в ответах.
+        Обход уважает robots.txt, ограничен тем же доменом и паузой между запросами.
+        Перед обновлением страницы сайтов удаляются, чтобы не копились дубли.
+      </div>
+      <div class="row">
+        <input id="site-url" placeholder="https://example.org" style="max-width:360px">
+        <input id="site-max" type="number" min="0" placeholder="Лимит страниц (0 — общий)" style="max-width:180px">
+        <label class="switch"><input type="checkbox" id="site-enabled" checked><span>Включён</span></label>
+        <button class="primary" id="site-add">Добавить сайт</button>
+        <span class="muted" id="site-msg"></span>
+      </div>
+      <table id="site-table">
+        <thead><tr><th>Адрес</th><th>Состояние</th><th>Лимит страниц</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h2>Обход сайтов</h2>
+      <div class="row">
+        <button class="primary" id="crawl-start">Обойти сайты</button>
+        <span class="muted" id="crawl-state">—</span>
+      </div>
+      <div class="bar"><div id="crawl-bar" style="width:0%"></div></div>
+      <div class="muted" id="crawl-progress"></div>
+    </div>
   </section>
 </main>
 
@@ -411,9 +408,8 @@ function loadTab(tab) {
   if (tab === 'corrections') loadCorrections();
   if (tab === 'synonyms') loadSynonyms();
   if (tab === 'exclusions') loadExclusions();
-  if (tab === 'sites') loadSites();
   if (tab === 'settings') { loadSettings(); loadCapabilities(); loadImages(); }
-  if (tab === 'index') loadIndex();
+  if (tab === 'index') { loadIndex(); loadSites(); }
 }
 
 document.getElementById('back').addEventListener('click', () => location.href = '/');
