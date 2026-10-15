@@ -153,11 +153,11 @@ def starter_prompts() -> dict:
 def capabilities() -> dict:
     """Перечень возможностей ассистента и подсказки из БД промтов."""
     return {
-        "groups": [
-            {"title": title, "items": items} for title, items in capabilities_mod.GROUPS
-        ],
+        "groups": capabilities_mod.groups(),
         "prompts": capabilities_mod.suggestions(),
         "text": capabilities_mod.render(),
+        "custom": capabilities_mod.is_custom(),
+        "source": "кабинет администратора" if capabilities_mod.is_custom() else "код (app/capabilities.py)",
     }
 
 

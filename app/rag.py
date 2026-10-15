@@ -94,7 +94,7 @@ def retrieve(query: str, top_k: int | None = None) -> list[RetrievedChunk]:
         try:
             import exclusions
 
-            ordered = exclusions.filter_chunks(ordered)
+            ordered = exclusions.filter_chunks(ordered, query)
         except Exception:
             pass
     return ordered[:top_k]

@@ -1,8 +1,13 @@
 """Ответ на вопрос «что ты умеешь»: перечень возможностей + подсказки из БД промтов."""
 
+import json
 import re
 
+import appdb
+import config
 import prompts as prompts_mod
+
+SETTING_KEY = "capabilities"
 
 INTENTS = (
     r"что\s+ты\s+умеешь",
@@ -53,6 +58,43 @@ def is_capabilities_question(question: str) -> bool:
     return any(pattern.search(text) for pattern in _PATTERNS)
 
 
+def groups() -> list[dict]:
+    """Актуальные группы: из БД, если админ их менял, иначе из кода."""
+    raw = appdb.get_setting(SETTING_KEY, "")
+    if raw:
+        try:
+            data = json.loads(raw)
+            if isinstance(data, list) and data:
+                return data
+        except json.JSONDecodeError:
+            pass
+    return [{"title": title, "items": list(items)} for title, items in GROUPS]
+
+
+def is_custom() -> bool:
+    return bool(appdb.get_setting(SETTING_KEY, ""))
+
+
+def save_groups(data: list[dict]) -> list[dict]:
+    """Сохранить перечень из кабинета администратора."""
+    clean: list[dict] = []
+    for group in data:
+        title = str(group.get("title", "")).strip()
+        items = [str(item).strip() for item in group.get("items", []) if str(item).strip()]
+        if not title or not items:
+            continue
+        clean.append({"title": title, "items": items})
+    if not clean:
+        raise ValueError("Нужен хотя бы один раздел с пунктами")
+    appdb.set_setting(SETTING_KEY, json.dumps(clean, ensure_ascii=False))
+    return clean
+
+
+def reset_groups() -> list[dict]:
+    appdb.set_setting(SETTING_KEY, "")
+    return groups()
+
+
 def suggestions(limit: int | None = None) -> list[str]:
     items = prompts_mod.get_prompts()
     texts = [item["text"] for item in items]
@@ -63,10 +105,10 @@ def suggestions(limit: int | None = None) -> list[str]:
 
 def render(limit: int | None = None) -> str:
     lines = ["Я — ассистент по базе знаний company.", "", "Что я умею:"]
-    for title, items in GROUPS:
+    for group in groups():
         lines.append("")
-        lines.append(f"{title}:")
-        lines.extend(f"— {item}" for item in items)
+        lines.append(f"{group['title']}:")
+        lines.extend(f"— {item}" for item in group["items"])
     hints = suggestions(limit)
     if hints:
         lines.append("")

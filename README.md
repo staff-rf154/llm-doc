@@ -142,7 +142,7 @@ curl -s -b cookie.txt -X POST localhost:8091/api/logout
 |---------|------------|
 | `users` | `id`, `username`, `salt`, `password_hash`, `role`, `active`, `created_at` |
 | `settings` | `key`, `value`, `updated_at` (сейчас — название базы знаний) |
-| `exclusions` | `id`, `pattern`, `source_name`, `origin` (`admin`/`comment`), `author`, `comment`, `request_id`, `created_at` |
+| `exclusions` | `id`, `pattern`, `scope` (`document`/`section`/`image`/`question`), `document`, `question`, `page`, `source_name`, `origin` (`admin`/`comment`), `author`, `comment`, `request_id`, `created_at` |
 | `sessions` | `token`, `user_id`, `created_at`, `expires_at` |
 | `requests` | `id`, `user_id`, `username`, `question`, `answer`, `grounded`, `corrected`, `doc_name`, `doc_pages`, `doc_ref`, `sources`, `latency_ms`, `created_at` |
 | `ratings` | `request_id`, `vote` (`up`/`down`), `comment`, `created_at`, `updated_at` |
@@ -376,6 +376,22 @@ curl -s -b cookie.txt -X POST localhost:8091/api/admin/images/start
 фрагменты исключённых документов отсекаются после поиска, а исправления
 администратора, ссылающиеся на эти документы, не предлагаются для подстановки.
 
+Виды правил (`scope`):
+
+| Вид | Что исключает | Пример комментария |
+|-----|---------------|---------------------|
+| `document` | весь документ | «исключить из ответа FileAuditor_manual.pdf» |
+| `section` | каталог/раздел документа | «не показывай AnalyticConsole_help» |
+| `image` | конкретную картинку (документ + страница) | «исключить картинку SIEM_help.pdf с. 34» |
+| `question` | документ, но только для похожих вопросов | «исключить user_manual.pdf для вопроса про веб-аналитику» |
+
+Разбор учитывает расширения файлов и сокращения, поэтому «FileAuditor_manual.pdf»
+не превращается в «FileAuditor_manual». Раздел определяется автоматически, если
+такой каталог есть в индексе. Правило «для вопроса» действует, если в вопросе
+есть ключевые слова правила или эмбеддинговая схожесть не ниже
+`EXCLUSION_QUESTION_THRESHOLD`. Исключения применяются к выдаче поиска, к подбору
+исправлений и к картинкам.
+
 Два способа добавить исключение:
 
 1. **Из комментария к оценке.** Пользователь пишет под ответом, например:
@@ -384,18 +400,33 @@ curl -s -b cookie.txt -X POST localhost:8091/api/admin/images/start
    а в ответе API возвращается поле `excluded`. Распознаются слова «исключить»,
    «исключи», «не использовать», «не показывать», «убрать», «не учитывать»;
    перечисление через запятую, «и», «также»; расширение `.pdf` сохраняется.
-2. **Из кабинета** — новая вкладка «Исключения»: выбор документа из списка
-   `data/docs` или ввод имени вручную, поле для комментария, удаление правила.
-   Показываются источник правила (комментарий или администратор), автор, число
-   упоминаний документа в ответах и дата добавления.
+2. **Из кабинета** — вкладка «Исключения»: выбор вида правила (документ,
+   раздел, изображение, для вопроса), выбор значения из списка или ввод вручную,
+   поле страницы и привязки к вопросу, удаление правила. В комментарии доступна
+   кнопка «Добавить из комментария» — она разбирает текст и создаёт сразу
+   несколько правил разных видов. В таблице показаны вид, что исключается,
+   документ, страница, привязанный вопрос, источник и дата.
 
 Отключается целиком настройкой `EXCLUSIONS_ENABLED=0`. Кэш правил —
 `EXCLUSIONS_CACHE_TTL` секунд, сбрасывается при любом изменении через API.
 
 ```bash
 curl -s -b cookie.txt localhost:8091/api/admin/exclusions | jq
+# исключить документ
 curl -s -b cookie.txt -X POST localhost:8091/api/admin/exclusions \
-  -H 'Content-Type: application/json' -d '{"pattern":"SIEM_help.pdf"}'
+  -H 'Content-Type: application/json' -d '{"pattern":"SIEM_help.pdf","scope":"document"}'
+# исключить картинку
+curl -s -b cookie.txt -X POST localhost:8091/api/admin/exclusions \
+  -H 'Content-Type: application/json' \
+  -d '{"pattern":"SIEM_help.pdf","scope":"image","page":34}'
+# документ не для этого вопроса
+curl -s -b cookie.txt -X POST localhost:8091/api/admin/exclusions \
+  -H 'Content-Type: application/json' \
+  -d '{"pattern":"user_manual.pdf","scope":"question","question":"веб-аналитика отчёт"}'
+# разобрать комментарий и создать правила
+curl -s -b cookie.txt -X POST localhost:8091/api/admin/exclusions \
+  -H 'Content-Type: application/json' \
+  -d '{"pattern":"текст","auto_parse":true,"comment":"исключить картинку SIEM_help.pdf с. 34"}'
 curl -s -b cookie.txt -X DELETE localhost:8091/api/admin/exclusions/3
 ```
 
@@ -767,6 +798,7 @@ make evaluate-ragas  # дополнительно faithfulness, answer_relevancy
 | `IMAGE_SKIP_FULLPAGE` | `0.6` | доля площади страницы, выше которой картинка считается фоном |
 | `EXCLUSIONS_ENABLED` | `1` | применять исключения документов |
 | `EXCLUSIONS_CACHE_TTL` | `60` | кэш правил исключений, сек |
+| `EXCLUSION_QUESTION_THRESHOLD` | `0.85` | схожесть вопроса для правил вида «для вопроса» |
 | `INGEST_CHECKPOINT_EVERY` | `64` | чанков между срезами прогресса |
 | `INGEST_BATCH_SIZE` | `64` | точек в одном upsert |
 | `INGEST_WORKERS` | `8` | потоков индексации (файлов одновременно) |

@@ -5,6 +5,7 @@ from pydantic import BaseModel, Field
 
 import appdb
 import auth
+import capabilities as capabilities_mod
 import config
 import corrections
 import docpages
@@ -458,8 +459,13 @@ def images_start(user: dict = Depends(auth.require_admin)) -> dict:
 
 
 class ExclusionCreate(BaseModel):
-    pattern: str = Field(min_length=2, max_length=200)
+    pattern: str = Field(min_length=1, max_length=200)
+    scope: str = Field(default="document", pattern="^(document|section|image|question)$")
+    document: str = ""
+    question: str = ""
+    page: int | None = None
     comment: str = ""
+    auto_parse: bool = False
 
 
 @router.get("/exclusions")
@@ -467,8 +473,26 @@ def list_exclusions(user: dict = Depends(auth.require_admin)) -> dict:
     return {
         "items": appdb.list_exclusions(),
         "documents": [item["name"] for item in docpages.list_documents()],
+        "sections": sorted(
+            {
+                item["source"].rsplit("/", 1)[0]
+                for item in _indexed_items()
+                if "/" in item["source"]
+            }
+        ),
+        "scopes": [
+            {"value": value, "label": exclusions.SCOPE_LABELS[value]}
+            for value in exclusions.SCOPES
+        ],
         "enabled": config.EXCLUSIONS_ENABLED,
     }
+
+
+def _indexed_items() -> list[dict]:
+    try:
+        return [{"source": name} for name in vs.known_sources()]
+    except Exception:
+        return []
 
 
 @router.post("/exclusions", status_code=201)
@@ -477,6 +501,25 @@ def create_exclusion(
     user: dict = Depends(auth.require_admin),
 ) -> dict:
     try:
+        if payload.auto_parse:
+            parsed = exclusions.parse_comment(payload.comment or payload.pattern)
+            created = []
+            for rule in parsed:
+                existing = appdb.get_exclusion_by_pattern(rule["pattern"])
+                item = existing or appdb.add_exclusion(
+                    rule["pattern"],
+                    origin="admin",
+                    author=user["username"],
+                    comment=payload.comment,
+                    scope=rule.get("scope", "document"),
+                    document=rule.get("document", ""),
+                    question=rule.get("question", ""),
+                    page=rule.get("page"),
+                )
+                if item:
+                    created.append(item)
+            return {"created": created}
+
         existing = appdb.get_exclusion_by_pattern(payload.pattern)
         if existing:
             return existing
@@ -485,6 +528,10 @@ def create_exclusion(
             origin="admin",
             author=user["username"],
             comment=payload.comment,
+            scope=payload.scope,
+            document=payload.document or payload.pattern,
+            question=payload.question,
+            page=payload.page,
         )
     finally:
         exclusions.invalidate()
@@ -503,6 +550,46 @@ def delete_exclusion(
     if not removed:
         raise HTTPException(status_code=404, detail="Правило не найдено")
     return {"ok": True}
+
+
+class CapabilitiesUpdate(BaseModel):
+    groups: list[dict]
+
+
+@router.get("/capabilities")
+def get_capabilities(user: dict = Depends(auth.require_admin)) -> dict:
+    return {
+        "groups": capabilities_mod.groups(),
+        "custom": capabilities_mod.is_custom(),
+        "source": (
+            "кабинет администратора"
+            if capabilities_mod.is_custom()
+            else "код: app/capabilities.py, константа GROUPS"
+        ),
+        "text": capabilities_mod.render(),
+    }
+
+
+@router.patch("/capabilities")
+def update_capabilities(
+    payload: CapabilitiesUpdate,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    try:
+        saved = capabilities_mod.save_groups(payload.groups)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"groups": saved, "custom": True, "source": "кабинет администратора"}
+
+
+@router.post("/capabilities/reset")
+def reset_capabilities(user: dict = Depends(auth.require_admin)) -> dict:
+    saved = capabilities_mod.reset_groups()
+    return {
+        "groups": saved,
+        "custom": False,
+        "source": "код: app/capabilities.py, константа GROUPS",
+    }
 
 
 @router.get("/index")

@@ -246,17 +246,24 @@
         напишет, например: «исключить из ответа FileAuditor_manual.pdf, SIEM_help.pdf».
       </div>
       <div class="row">
-        <select id="exc-doc" style="max-width:420px"></select>
-        <input id="exc-pattern" placeholder="Или введите имя файла" style="max-width:260px">
-        <input id="exc-comment" placeholder="Комментарий (необязательно)" style="max-width:260px">
+        <select id="exc-scope" style="max-width:260px"></select>
+        <select id="exc-doc" style="max-width:380px"></select>
+        <input id="exc-pattern" placeholder="Имя файла, раздела или имя файла картинки" style="max-width:260px">
+        <input id="exc-page" type="number" min="1" placeholder="Страница" style="max-width:110px">
+        <input id="exc-question" placeholder="Для какого вопроса (если вид «Для вопроса»)" style="max-width:260px">
         <button class="primary" id="exc-add">Добавить исключение</button>
+      </div>
+      <div class="row">
+        <input id="exc-comment" placeholder="Комментарий: система сама разберёт фразы вроде «исключить картинку SIEM_help.pdf с. 34»" style="max-width:720px">
+        <label class="switch"><input type="checkbox" id="exc-parse"><span>Разобрать комментарий</span></label>
+        <button id="exc-parse-add">Добавить из комментария</button>
         <span class="muted" id="exc-msg"></span>
       </div>
     </div>
     <div class="card">
       <h2>Список исключений</h2>
       <table id="exc-table">
-        <thead><tr><th>Файл</th><th>Источник</th><th>Автор</th><th>Комментарий</th><th>Упоминаний в ответах</th><th>Добавлено</th><th></th></tr></thead>
+        <thead><tr><th>Вид</th><th>Что исключаем</th><th>Документ</th><th>Страница</th><th>Вопрос</th><th>Источник</th><th>Упоминаний</th><th>Добавлено</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -357,7 +364,7 @@ function loadTab(tab) {
   if (tab === 'corrections') loadCorrections();
   if (tab === 'synonyms') loadSynonyms();
   if (tab === 'exclusions') loadExclusions();
-  if (tab === 'settings') { loadSettings(); loadImages(); }
+  if (tab === 'settings') { loadSettings(); loadCapabilities(); loadImages(); }
   if (tab === 'index') loadIndex();
 }
 
@@ -619,28 +626,47 @@ function editAnswer(item) {
 
 let imageTimer = null;
 
+let excScopes = [];
+
 async function loadExclusions() {
   const data = await j('/api/admin/exclusions');
-  const select = document.getElementById('exc-doc');
-  const previous = select.value;
-  while (select.firstChild) select.removeChild(select.firstChild);
-  (data.documents || []).forEach(name => {
+  excScopes = data.scopes || [];
+  const scopeSelect = document.getElementById('exc-scope');
+  const previousScope = scopeSelect.value;
+  while (scopeSelect.firstChild) scopeSelect.removeChild(scopeSelect.firstChild);
+  excScopes.forEach(scope => {
+    const option = document.createElement('option');
+    option.value = scope.value;
+    option.textContent = scope.label;
+    scopeSelect.appendChild(option);
+  });
+  if (previousScope) scopeSelect.value = previousScope;
+
+  const docSelect = document.getElementById('exc-doc');
+  const previous = docSelect.value;
+  while (docSelect.firstChild) docSelect.removeChild(docSelect.firstChild);
+  const scope = scopeSelect.value;
+  const options = scope === 'section' ? (data.sections || []) : (data.documents || []);
+  options.forEach(name => {
     const option = document.createElement('option');
     option.value = name;
     option.textContent = name;
-    select.appendChild(option);
+    docSelect.appendChild(option);
   });
-  if (previous) select.value = previous;
+  if (previous) docSelect.value = previous;
   document.getElementById('exc-msg').textContent = '';
 
   const body = document.querySelector('#exc-table tbody');
   while (body.firstChild) body.removeChild(body.firstChild);
   (data.items || []).forEach(item => {
+    const label = (excScopes.find(s => s.value === item.scope) || {}).label || item.scope;
     body.appendChild(el('tr', {}, [
+      el('td', { textContent: label }),
       el('td', { textContent: item.pattern }),
-      el('td', { textContent: item.origin === 'comment' ? 'из комментария' : 'администратор' }),
-      el('td', { textContent: item.author || '—' }),
-      el('td', { textContent: item.comment || '—' }),
+      el('td', { textContent: item.document || '—' }),
+      el('td', { textContent: item.page || '—' }),
+      el('td', { textContent: item.question || '—' }),
+      el('td', { textContent: (item.origin === 'comment' ? 'из комментария' : 'администратор') + (item.author ? ' · ' + item.author : '') }),
       el('td', { textContent: item.mentions || 0 }),
       el('td', { textContent: item.created_at }),
       el('td', {}, [
@@ -648,7 +674,7 @@ async function loadExclusions() {
           className: 'danger',
           textContent: 'Удалить',
           onclick: async () => {
-            if (!confirm('Вернуть документ в ответы?')) return;
+            if (!confirm('Вернуть в ответы?')) return;
             await j('/api/admin/exclusions/' + item.id, { method: 'DELETE' });
             loadExclusions();
           }
@@ -658,21 +684,138 @@ async function loadExclusions() {
   });
 }
 
+document.getElementById('exc-scope').addEventListener('change', loadExclusions);
+
 document.getElementById('exc-add').addEventListener('click', async () => {
   const msg = document.getElementById('exc-msg');
   const typed = document.getElementById('exc-pattern').value.trim();
-  const pattern = typed || document.getElementById('exc-doc').value;
-  if (!pattern) { msg.textContent = 'Укажите документ'; return; }
+  const document_ = typed || document.getElementById('exc-doc').value;
+  if (!document_) { msg.textContent = 'Укажите документ'; return; }
+  const pageRaw = document.getElementById('exc-page').value.trim();
   try {
     await j('/api/admin/exclusions', {
       method: 'POST',
-      body: JSON.stringify({ pattern, comment: document.getElementById('exc-comment').value })
+      body: JSON.stringify({
+        pattern: document_.toLowerCase(),
+        scope: document.getElementById('exc-scope').value,
+        document: document_,
+        question: document.getElementById('exc-question').value.trim(),
+        page: pageRaw ? parseInt(pageRaw, 10) : null,
+        comment: document.getElementById('exc-comment').value
+      })
     });
-    msg.textContent = 'Исключено: ' + pattern;
+    msg.textContent = 'Исключено: ' + document_;
     document.getElementById('exc-pattern').value = '';
+    document.getElementById('exc-page').value = '';
+    document.getElementById('exc-question').value = '';
     document.getElementById('exc-comment').value = '';
     loadExclusions();
   } catch (err) { msg.textContent = err.message; }
+});
+
+document.getElementById('exc-parse-add').addEventListener('click', async () => {
+  const msg = document.getElementById('exc-msg');
+  const comment = document.getElementById('exc-comment').value.trim();
+  if (!comment) { msg.textContent = 'Введите комментарий'; return; }
+  try {
+    const res = await j('/api/admin/exclusions', {
+      method: 'POST',
+      body: JSON.stringify({ pattern: comment, scope: 'document', comment, auto_parse: true })
+    });
+    const created = (res.created || []).map(item => item.pattern + (item.page ? ' с. ' + item.page : ''));
+    msg.textContent = created.length ? 'Добавлено: ' + created.join(', ') : 'Ничего не распознано';
+    document.getElementById('exc-comment').value = '';
+    loadExclusions();
+  } catch (err) { msg.textContent = err.message; }
+});
+
+async function loadCapabilities() {
+  const data = await j('/api/admin/capabilities');
+  document.getElementById('cap-source').textContent = data.source;
+  const box = document.getElementById('cap-editor');
+  while (box.firstChild) box.removeChild(box.firstChild);
+  (data.groups || []).forEach((group, index) => {
+    box.appendChild(capGroupRow(group.title, group.items, index));
+  });
+  document.getElementById('cap-msg').textContent = '';
+}
+
+function capGroupRow(title, items, index) {
+  const titleInput = el('input', { value: title, placeholder: 'Название раздела' });
+  const listBox = el('div', { className: 'muted' });
+  items.forEach((item, itemIndex) => {
+    const input = el('input', { value: item, placeholder: 'Пункт списка' });
+    input.dataset.item = '1';
+    listBox.appendChild(el('div', { className: 'row', style: 'margin-bottom:6px' }, [
+      el('div', { style: 'flex:1' }, [input]),
+      el('button', {
+        textContent: '×',
+        title: 'Удалить пункт',
+        onclick: () => { input.parentNode.parentNode.remove(); }
+      })
+    ]));
+  });
+  const row = el('div', { className: 'card', style: 'background:var(--panel-2)' }, [
+    el('div', { className: 'row' }, [
+      el('div', { style: 'flex:1' }, [titleInput]),
+      el('button', {
+        textContent: '+ пункт',
+        onclick: () => {
+          const input = el('input', { placeholder: 'Пункт списка' });
+          listBox.appendChild(el('div', { className: 'row', style: 'margin-bottom:6px' }, [
+            el('div', { style: 'flex:1' }, [input]),
+            el('button', { textContent: '×', onclick: () => input.parentNode.parentNode.remove() })
+          ]));
+        }
+      }),
+      el('button', {
+        className: 'danger',
+        textContent: 'Удалить раздел',
+        onclick: () => row.remove()
+      })
+    ]),
+    listBox
+  ]);
+  row.dataset.group = '1';
+  return row;
+}
+
+function collectCapabilities() {
+  const groups = [];
+  document.querySelectorAll('#cap-editor [data-group]').forEach(groupBox => {
+    const title = groupBox.querySelector('input').value.trim();
+    const items = [];
+    groupBox.querySelectorAll('input[data-item]').forEach(input => {
+      const value = input.value.trim();
+      if (value) items.push(value);
+    });
+    if (title && items.length) groups.push({ title, items });
+  });
+  return groups;
+}
+
+document.getElementById('cap-add-group').addEventListener('click', () => {
+  document.getElementById('cap-editor').appendChild(capGroupRow('', ['Новый пункт'], 0));
+});
+
+document.getElementById('cap-save').addEventListener('click', async () => {
+  const msg = document.getElementById('cap-msg');
+  try {
+    await j('/api/admin/capabilities', {
+      method: 'PATCH',
+      body: JSON.stringify({ groups: collectCapabilities() })
+    });
+    msg.textContent = 'Сохранено';
+    loadCapabilities();
+  } catch (err) { msg.textContent = err.message; }
+});
+
+document.getElementById('cap-reset').addEventListener('click', async () => {
+  const msg = document.getElementById('cap-msg');
+  if (!confirm('Вернуть перечень из кода и удалить правки?')) return;
+  await j('/api/admin/capabilities/reset', { method: 'POST' });
+  msg.textContent = 'Возвращено значение из кода';
+  loadCapabilities();
 });
 
 async function loadImages() {
