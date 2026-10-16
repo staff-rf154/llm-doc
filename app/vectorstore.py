@@ -6,8 +6,16 @@ from qdrant_client.http import models
 from sentence_transformers import SentenceTransformer
 
 import config
+import settings
 
 EMBED_LOCK = threading.Lock()
+
+
+def sparse_enabled() -> bool:
+    """Гибридный поиск включён и настроен на слияние rrf."""
+    if not settings.bool_value("HYBRID_SPARSE", config.HYBRID_SPARSE):
+        return False
+    return (settings.value("HYBRID_FUSION", config.HYBRID_FUSION) or "rrf").lower() == "rrf"
 
 
 @lru_cache(maxsize=1)
@@ -27,29 +35,33 @@ def get_embedder() -> SentenceTransformer:
 
 
 @lru_cache(maxsize=1)
-def get_sparse_model():
+def get_sparse_model(name: str = ""):
     """BM25-модель fastembed для точного поиска по терминам (sparse-вектора)."""
     from fastembed.sparse import SparseTextEmbedding
 
-    return SparseTextEmbedding(model_name=config.SPARSE_MODEL)
+    return SparseTextEmbedding(
+        model_name=name or settings.value("SPARSE_MODEL", config.SPARSE_MODEL)
+    )
 
 
 @lru_cache(maxsize=1)
-def get_reranker():
+def get_reranker(name: str = "", max_length: int = 0):
     from sentence_transformers import CrossEncoder
 
     return CrossEncoder(
-        config.RERANKER_MODEL,
+        name or settings.value("RERANKER_MODEL", config.RERANKER_MODEL),
         device="cpu",
-        max_length=int(config.RERANKER_MAX_LENGTH),
+        max_length=int(
+            max_length
+            or settings.int_value("RERANKER_MAX_LENGTH")
+            or config.RERANKER_MAX_LENGTH
+        ),
     )
 
 
 def embed_sparse(texts: list[str]) -> list[dict]:
     """BM25-вектора fastembed: {индексы: [...], значения: [...]} для Qdrant."""
-    if not texts:
-        return []
-    if not config.HYBRID_SPARSE:
+    if not texts or not sparse_enabled():
         return []
     vectors = []
     for item in get_sparse_model().embed(texts):
@@ -59,7 +71,7 @@ def embed_sparse(texts: list[str]) -> list[dict]:
 
 def sparse_query(text: str):
     """BM25-вектор запроса для поиска по sparse-индексу."""
-    if not config.HYBRID_SPARSE:
+    if not sparse_enabled():
         return None
     item = next(iter(get_sparse_model().query_embed([text])))
     return models.SparseVector(indices=item.indices.tolist(), values=item.values.tolist())
@@ -76,11 +88,11 @@ def supports_sparse(name: str) -> bool:
 
 
 def embed_passages(texts: list[str]) -> list[list[float]]:
-    prefixed = [config.E5_PASSAGE_PREFIX + t for t in texts]
+    prefixed = [settings.value("E5_PASSAGE_PREFIX", config.E5_PASSAGE_PREFIX) + t for t in texts]
     with EMBED_LOCK:
         vectors = get_embedder().encode(
             prefixed,
-            batch_size=config.EMBED_BATCH,
+            batch_size=settings.int_value("EMBED_BATCH") or config.EMBED_BATCH,
             normalize_embeddings=True,
             show_progress_bar=len(prefixed) > 200,
         )
@@ -90,7 +102,7 @@ def embed_passages(texts: list[str]) -> list[list[float]]:
 def embed_query(text: str) -> list[float]:
     with EMBED_LOCK:
         vector = get_embedder().encode(
-            [config.E5_QUERY_PREFIX + text],
+            [settings.value("E5_QUERY_PREFIX", config.E5_QUERY_PREFIX) + text],
             normalize_embeddings=True,
         )
     return vector[0].tolist()
@@ -185,7 +197,7 @@ def ensure_collection(name: str, recreate: bool = False) -> None:
     if exists:
         return
     sparse_config = None
-    if config.HYBRID_SPARSE:
+    if sparse_enabled():
         sparse_config = {
             "sparse": models.SparseVectorParams(
                 index=models.SparseIndexParams(on_disk=False)

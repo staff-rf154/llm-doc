@@ -59,13 +59,13 @@ def warm_search() -> None:
     """Прогреть модели поиска в фоне, чтобы первый запрос не ждал загрузки."""
     import vectorstore as vs
 
-    if config.HYBRID_SPARSE:
+    if vs.sparse_enabled():
         try:
             vs.get_sparse_model()
             print("BM25-модель загружена")
         except Exception as exc:
             print(f"BM25-модель недоступна: {exc}")
-    if config.RERANKER_ENABLED:
+    if settings.bool_value("RERANKER_ENABLED", config.RERANKER_ENABLED):
         try:
             started = time.time()
             vs.get_reranker()

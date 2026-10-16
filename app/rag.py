@@ -214,7 +214,7 @@ def _dense_points(client, target: str, variant: str, limit: int) -> list:
 
 def _hybrid_points(client, target: str, variant: str, limit: int):
     """Dense + BM25 с слиянием RRF; при отсутствии sparse-индекса — только dense."""
-    if not config.HYBRID_SPARSE or not vs.supports_sparse(target):
+    if not vs.sparse_enabled() or not vs.supports_sparse(target):
         return _dense_points(client, target, variant, limit)
     sparse = vs.sparse_query(variant)
     if sparse is None:
@@ -237,15 +237,20 @@ def _hybrid_points(client, target: str, variant: str, limit: int):
         return _dense_points(client, target, variant, limit)
 
 
+def keep_count() -> int:
+    return settings.int_value("RERANKER_TOP_K") or config.RERANKER_TOP_K
+
+
 def rerank(query: str, chunks: list[RetrievedChunk], top_k: int) -> list[RetrievedChunk]:
     """Переранжирование кандидатов cross-encoder'ом."""
-    if not config.RERANKER_ENABLED or not chunks:
+    if not settings.bool_value("RERANKER_ENABLED", config.RERANKER_ENABLED) or not chunks:
         return chunks[:top_k]
-    candidates = chunks[: settings.int_value("RERANKER_CANDIDATES") or len(chunks)]
+    candidates = chunks[: (settings.int_value("RERANKER_CANDIDATES") or config.RERANKER_CANDIDATES) or len(chunks)]
     try:
         model = vs.get_reranker()
         pairs = [(query, chunk.text) for chunk in candidates]
-        scores = model.predict(pairs, batch_size=config.RERANKER_BATCH, show_progress_bar=False)
+        batch = settings.int_value("RERANKER_BATCH") or config.RERANKER_BATCH
+        scores = model.predict(pairs, batch_size=batch, show_progress_bar=False)
     except Exception:
         return chunks[:top_k]
     ranked = sorted(
@@ -253,7 +258,7 @@ def rerank(query: str, chunks: list[RetrievedChunk], top_k: int) -> list[Retriev
         key=lambda pair: pair[1],
         reverse=True,
     )
-    keep = settings.int_value("RERANKER_TOP_K") or top_k
+    keep = settings.int_value("RERANKER_TOP_K") or config.RERANKER_TOP_K or top_k
     result = []
     for chunk, score in ranked[: max(top_k, keep)]:
         chunk.score = round(score, 4)
@@ -268,7 +273,7 @@ def retrieve(query: str, top_k: int | None = None) -> list[RetrievedChunk]:
     if not client.collection_exists(target):
         return []
 
-    pool = max(settings.int_value("HYBRID_CANDIDATES") or top_k, top_k)
+    pool = max(settings.int_value("HYBRID_CANDIDATES") or config.HYBRID_CANDIDATES, top_k)
     merged: dict[tuple[str, int], RetrievedChunk] = {}
     for variant in query_variants(query):
         for point in _hybrid_points(client, target, variant, pool):

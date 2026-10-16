@@ -9,6 +9,7 @@
 import re
 
 import config
+import settings
 import vectorstore as vs
 
 LINUX = "linux"
@@ -185,4 +186,4 @@ def platform_label(chunk) -> str:
 
 
 def enabled() -> bool:
-    return config.PLATFORM_AWARE
+    return settings.bool_value("PLATFORM_AWARE", config.PLATFORM_AWARE)

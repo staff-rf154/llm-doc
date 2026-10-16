@@ -13,6 +13,7 @@ import config
 import corrections
 import docpages
 import documents as docs_mod
+import evaluation
 import images
 import ingest
 import lessons
@@ -225,7 +226,7 @@ def update_params(
         "items": settings.describe(),
         "requires_reindex": reindex,
         "detail": (
-            "Изменения с применены, но требуют переиндексации: " + ", ".join(reindex)
+            "Изменения применены, но требуют переиндексации: " + ", ".join(reindex)
             if reindex
             else ""
         ),
@@ -382,6 +383,28 @@ def documents(user: dict = Depends(auth.require_admin)) -> dict:
     return {"items": docpages.list_documents()}
 
 
+class EvalStart(BaseModel):
+    ragas: bool = False
+
+
+@router.get("/eval")
+def eval_status(user: dict = Depends(auth.require_admin)) -> dict:
+    """Отчёт по качеству поиска и ответов + состояние фонового прогона."""
+    return {"job": evaluation.job.snapshot(), **evaluation.summary()}
+
+
+@router.post("/eval/start", status_code=202)
+def eval_start(
+    payload: EvalStart,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    """Запустить оценку качества по датасету."""
+    result = evaluation.job.start(payload.ragas)
+    if result.get("error"):
+        raise HTTPException(status_code=400, detail=result["error"])
+    return result
+
+
 @router.get("/docs")
 def docs_list(user: dict = Depends(auth.require_admin)) -> dict:
     """Файлы документации и их состояние в индексе."""
@@ -391,7 +414,7 @@ def docs_list(user: dict = Depends(auth.require_admin)) -> dict:
         "total": len(items),
         "uploaded": len([item for item in items if item["editable"]]),
         "indexed": len([item for item in items if item["indexed"]]),
-        "max_mb": config.UPLOAD_MAX_MB,
+        "max_mb": settings.int_value("UPLOAD_MAX_MB") or config.UPLOAD_MAX_MB,
         "formats": list(docs_mod.FILE_EXTENSIONS),
     }
 

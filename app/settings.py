@@ -48,6 +48,9 @@ INGEST = "Индексация"
 IMAGES = "Изображения из документации"
 WEBSITES = "Сайты и обход"
 LESSONS = "Обучение"
+HYBRID = "Гибридный поиск"
+RERANK = "Переранжирование"
+UPLOADS = "Загрузка документов"
 
 PARAMS: list[Param] = [
     Param("LLM_MODEL", "Модель генерации", group=GENERATION,
@@ -74,6 +77,42 @@ PARAMS: list[Param] = [
           hint="Как ассистент отвечает: стиль, цитаты, отказ при отсутствии ответа"),
     Param("EMBEDDING_MODEL", "Модель эмбеддингов", group=RETRIEVAL, requires_reindex=True,
           hint="Смена требует полной переиндексации документации"),
+    Param("E5_QUERY_PREFIX", "Префикс запроса e5", group=RETRIEVAL, requires_reindex=True,
+          hint="Для multilingual-e5-base обязательно 'query: '. Менять только вместе с моделью эмбеддингов"),
+    Param("E5_PASSAGE_PREFIX", "Префикс документа e5", group=RETRIEVAL, requires_reindex=True,
+          hint="Для multilingual-e5-base обязательно 'passage: '"),
+    Param("EMBED_BATCH", "Батч эмбеддингов", "int", group=RETRIEVAL,
+          hint="Сколько фрагментов считать эмбеддингами за раз при индексации"),
+    Param("HYBRID_SPARSE", "Гибридный поиск (dense + BM25)", "bool", group=HYBRID,
+          hint="Включать точный поиск BM25 вместе с векторным. Требует индексации со sparse-векторами"),
+    Param("SPARSE_MODEL", "BM25-модель", group=HYBRID, requires_reindex=True,
+          hint="Модель fastembed для точного поиска по терминам и названиям продуктов"),
+    Param("HYBRID_CANDIDATES", "Кандидатов от каждого канала", "int", group=HYBRID,
+          hint="Ширина пула до переранжирования: 15–30"),
+    Param("HYBRID_FUSION", "Способ слияния каналов", group=HYBRID, options=["rrf", "dense"],
+          hint="rrf — Reciprocal Rank Fusion (рекомендуется), dense — только векторный канал"),
+    Param("RERANKER_ENABLED", "Переранжирование ответа", "bool", group=RERANK,
+          hint="Cross-encoder пересчитывает порядок фрагментов перед формированием ответа"),
+    Param("RERANKER_MODEL", "Модель reranker'а", group=RERANK,
+          hint="Мультиязычная модель пары «запрос-фрагмент», например BAAI/bge-reranker-v2-m3"),
+    Param("RERANKER_CANDIDATES", "Кандидатов на переранжирование", "int", group=RERANK,
+          hint="Сколько фрагментов оценивает модель: 10–30"),
+    Param("RERANKER_TOP_K", "Фрагментов после reranker'а", "int", group=RERANK,
+          hint="Сколько лучших фрагментов уходит в промпт"),
+    Param("RERANKER_MAX_LENGTH", "Максимум токенов на пару", "int", group=RERANK,
+          hint="Ограничение длины фрагмента для оценки: меньше — быстрее"),
+    Param("RERANKER_BATCH", "Батч reranker'а", "int", group=RERANK,
+          hint="Сколько пар оценивается за раз на CPU"),
+    Param("PLATFORM_AWARE", "Учитывать Windows и Linux", "bool", group=RETRIEVAL,
+          hint="Догружать фрагменты документа для другой ОС, если ОС не указана в вопросе"),
+    Param("PLATFORM_EXTRA_CHUNKS", "Фрагментов второй ОС", "int", group=RETRIEVAL,
+          hint="Сколько фрагментов докачивать из парного документа"),
+    Param("PLATFORM_MAX_EXTRA", "Всего фрагментов второй ОС", "int", group=RETRIEVAL),
+    Param("SSE_HEARTBEAT", "Пауза между ping в чате, сек", "int", group=GENERATION,
+          hint="Служебная строка в потоке ответа, чтобы соединение не рвалось"),
+    Param("UPLOAD_MAX_MB", "Максимум МБ для файла", "int", group=UPLOADS,
+          hint="Ограничение для загрузки с ПК и скачивания по ссылке"),
+    Param("UPLOAD_URL_TIMEOUT", "Таймаут скачивания, сек", "int", group=UPLOADS),
     Param("CHUNK_SIZE", "Размер чанка", "int", group=RETRIEVAL, requires_reindex=True),
     Param("CHUNK_OVERLAP", "Перекрытие чанков", "int", group=RETRIEVAL, requires_reindex=True),
     Param("INGEST_WORKERS", "Потоков индексации", "int", group=INGEST,
@@ -257,15 +296,44 @@ def save(values: dict[str, str]) -> list[str]:
         if param.requires_reindex:
             reindex.append(key)
     invalidate()
+    if changed:
+        _reload_models()
     return reindex
+
+
+MODEL_KEYS = ("SPARSE_MODEL", "RERANKER_MODEL", "RERANKER_MAX_LENGTH", "EMBEDDING_MODEL")
+
+
+def _reload_models() -> None:
+    """Сбросить кеш загруженных моделей, если сменились модели поиска."""
+    try:
+        import vectorstore as vs
+    except Exception:
+        return
+    vs.get_sparse_model.cache_clear()
+    vs.get_reranker.cache_clear()
+    vs.get_embedder.cache_clear()
 
 
 def reset(key: str) -> None:
     appdb.set_setting(key, "")
     invalidate()
+    if key in MODEL_KEYS:
+        _reload_models()
 
 
 def groups() -> list[str]:
-    order = [GENERATION, RETRIEVAL, BEHAVIOUR, LESSONS, WEBSITES, IMAGES, INGEST]
+    order = [
+        GENERATION,
+        RETRIEVAL,
+        HYBRID,
+        RERANK,
+        BEHAVIOUR,
+        LESSONS,
+        WEBSITES,
+        UPLOADS,
+        IMAGES,
+        INGEST,
+    ]
     present = {param.group for param in PARAMS}
     return [group for group in order if group in present]

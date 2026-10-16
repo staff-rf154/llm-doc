@@ -961,6 +961,20 @@ LLM_MODEL=gpt-4o-mini
   отдельно, алиас `docs` переключается в конце.
 - Модели прогреваются в фоне при старте (`main.warm_search`), поэтому первый
   вопрос не ждёт загрузки reranker.
+- Все параметры retrieval'а меняются в кабинете (вкладка «Настройки», группы
+  «Поиск и чанкинг», «Гибридный поиск», «Переранжирование»): код читает их через
+  `settings.value(...)`, поэтому переключение `RERANKER_ENABLED`, `HYBRID_SPARSE`
+  или `HYBRID_FUSION` действует сразу. При смене `RERANKER_MODEL`,
+  `SPARSE_MODEL`, `E5_*_PREFIX` или `EMBEDDING_MODEL` кеш моделей сбрасывается,
+  такие параметры помечены «требует переиндексации».
+- `HYBRID_FUSION` поддерживает `rrf` (по умолчанию) и `dense` — во втором случае
+  BM25-канал не используется, а candidates берутся только из векторного поиска.
+- В кабинете есть карточка «Оценка качества»: запуск прогона по датасету
+  `data/eval/dataset.json` в фоне (`GET /api/admin/eval`,
+  `POST /api/admin/eval/start`), показ context_recall, доли ключевых слов,
+  grounded_rate и разбивки по вопросам; вариант «с RAGAS» считает ещё и
+  верность ответа контексту (`make evaluate` и `make evaluate-ragas` делают то же
+  из командной строки).
 
 Задержка поиска на CPU: гибридный запрос ~5 с, rerank 10 кандидатов ~4 с.
 
@@ -993,7 +1007,10 @@ make evaluate        # grounded_rate, context_recall, hit_rate
 make evaluate-ragas  # дополнительно faithfulness, answer_relevancy, context_precision
 ```
 
-Отчёт пишется в `data/eval/report.json`.
+Отчёт пишется в `data/eval/report.json`. Тот же прогон запускается из кабинета:
+вкладка «Настройки» → карточка «Оценка качества» (кнопки «Запустить оценку» и
+«Запустить с RAGAS»); API: `GET /api/admin/eval`, `POST /api/admin/eval/start`
+с `{"ragas": true}`.
 
 ## Переменные окружения
 

@@ -394,6 +394,27 @@
         с релевантностью выше порога.
       </div>
     </div>
+
+  <div class="card" style="margin-top:16px">
+      <h2>Оценка качества</h2>
+      <div class="muted" style="margin-bottom:10px">
+        Прогон по датасету data/eval/dataset.json: доля найденного контекста,
+        попадание ключевых слов в ответ и доля ответов по документации. RAGAS
+        дополнительно считает верность ответа контексту и релевантность ответа
+        вопросу — это медленно, так как идёт отдельный вызов LLM на вопрос.
+      </div>
+      <div class="row">
+        <button class="primary" id="eval-start">Запустить оценку</button>
+        <button id="eval-start-ragas">Запустить с RAGAS</button>
+        <span class="muted" id="eval-state">—</span>
+      </div>
+      <div class="row" id="eval-metrics"></div>
+      <div class="muted" id="eval-time"></div>
+      <table id="eval-table">
+        <thead><tr><th>Вопрос</th><th>Контекст</th><th>Ключевые слова</th><th>По документации</th><th>Источники</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
   </section>
 
   <section id="tab-docs" class="tab hidden">
@@ -509,7 +530,7 @@ function loadTab(tab) {
   if (tab === 'corrections') loadCorrections();
   if (tab === 'synonyms') loadSynonyms();
   if (tab === 'train') { loadLessons(); loadTraining(); }
-  if (tab === 'settings') { loadSettings(); loadCapabilities(); loadImages(); }
+  if (tab === 'settings') { loadSettings(); loadCapabilities(); loadImages(); loadEval(); }
   if (tab === 'index') { loadIndex(); loadSites(); }
   if (tab === 'docs') loadDocs();
 }
@@ -1509,6 +1530,55 @@ document.getElementById('corr-extract').addEventListener('click', async () => {
 });
 
 document.getElementById('corr-save').addEventListener('click', () => saveNewCorrection());
+
+function evalValue(value) {
+  return value === null || value === undefined ? '—' : String(value);
+}
+
+async function loadEval() {
+  const data = await j('/api/admin/eval');
+  const job = data.job || {};
+  document.getElementById('eval-state').textContent =
+    job.status === 'running' ? 'идёт оценка… (начата ' + (job.started_at || '') + ')'
+      : job.status === 'error' ? 'ошибка: ' + (job.error || '')
+      : job.finished_at ? 'последний прогон: ' + job.finished_at
+      : 'оценка не запускалась';
+  document.getElementById('eval-time').textContent =
+    data.exists ? 'Отчёт: ' + data.updated_at + ' · вопросов: ' + data.samples
+      : data.dataset_exists ? 'Отчёта пока нет' : 'Датасет не найден: data/eval/dataset.json';
+
+  const metrics = document.getElementById('eval-metrics');
+  while (metrics.firstChild) metrics.removeChild(metrics.firstChild);
+  [['Контекст (recall)', data.context_recall], ['Ключевые слова', data.answer_keyword_hit_rate],
+   ['По документации', data.grounded_rate]].forEach(pair => {
+    metrics.appendChild(el('span', { className: 'muted', textContent: pair[0] + ': ' + evalValue(pair[1]) }));
+  });
+
+  const body = document.querySelector('#eval-table tbody');
+  while (body.firstChild) body.removeChild(body.firstChild);
+  (data.rows || []).forEach(row => {
+    body.appendChild(el('tr', {}, [
+      el('td', { textContent: row.question }),
+      el('td', { textContent: evalValue(row.context_recall) }),
+      el('td', { textContent: evalValue(row.answer_keyword_hit_rate) }),
+      el('td', { textContent: row.grounded ? 'да' : 'нет' }),
+      el('td', { className: 'muted', textContent: (row.sources || []).length })
+    ]));
+  });
+  if (job.status === 'running') setTimeout(loadEval, 5000);
+}
+
+function startEval(ragas) {
+  const button = document.getElementById(ragas ? 'eval-start-ragas' : 'eval-start');
+  button.disabled = true;
+  document.getElementById('eval-state').textContent = 'запускаю…';
+  return j('/api/admin/eval/start', { method: 'POST', body: JSON.stringify({ ragas }) })
+    .catch(err => { document.getElementById('eval-state').textContent = 'ошибка: ' + err.message; })
+    .finally(() => { button.disabled = false; loadEval(); });
+}
+
+document.getElementById('eval-start').addEventListener('click', () => startEval(false));
+document.getElementById('eval-start-ragas').addEventListener('click', () => startEval(true));
 
 async function loadSettings() {
   const data = await j('/api/admin/settings');

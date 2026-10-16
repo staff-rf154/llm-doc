@@ -125,7 +125,7 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
         events: queue.Queue = queue.Queue()
         done = object()
         answer_parts: list[str] = []
-        heartbeat = settings.int_value("SSE_HEARTBEAT") or 10
+        heartbeat = settings.int_value("SSE_HEARTBEAT") or config.SSE_HEARTBEAT
 
         def pump() -> None:
             try:

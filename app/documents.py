@@ -16,6 +16,7 @@ from urllib.parse import unquote, urlparse
 
 import config
 import index_state
+import settings
 import vectorstore as vs
 from loaders import SUPPORTED, load_document
 
@@ -32,6 +33,14 @@ FORMAT_LABELS = {
     ".html": "HTML",
     ".htm": "HTML",
 }
+
+
+def _max_mb() -> int:
+    return settings.int_value("UPLOAD_MAX_MB") or config.UPLOAD_MAX_MB
+
+
+def _url_timeout() -> int:
+    return settings.int_value("UPLOAD_URL_TIMEOUT") or config.UPLOAD_URL_TIMEOUT
 
 
 def _uploads_root() -> Path:
@@ -91,9 +100,9 @@ def save_bytes(filename: str, content: bytes) -> dict:
     """Сохранить загруженный файл в каталог загрузок."""
     name = safe_name(filename)
     check_extension(name)
-    limit = config.UPLOAD_MAX_MB * 1024 * 1024
+    limit = _max_mb() * 1024 * 1024
     if len(content) > limit:
-        raise ValueError(f"Файл больше {config.UPLOAD_MAX_MB} МБ")
+        raise ValueError(f"Файл больше {_max_mb()} МБ")
     if not content:
         raise ValueError("Файл пустой")
     root = _uploads_root()
@@ -124,10 +133,10 @@ def fetch_url(url: str) -> dict:
         raise ValueError("Нужна ссылка http:// или https://")
     if not parsed.netloc:
         raise ValueError("В ссылке нет адреса сайта")
-    limit = config.UPLOAD_MAX_MB * 1024 * 1024
+    limit = _max_mb() * 1024 * 1024
     with httpx.Client(
         follow_redirects=True,
-        timeout=config.UPLOAD_URL_TIMEOUT,
+        timeout=_url_timeout(),
         headers={"User-Agent": config.WEB_CRAWL_USER_AGENT},
     ) as client:
         response = client.get(url.strip())
@@ -137,7 +146,7 @@ def fetch_url(url: str) -> dict:
     if content_type in ("text/html", "application/xhtml+xml"):
         raise ValueError("По ссылке отдаётся HTML-страница — нужна прямая ссылка на файл")
     if len(content) > limit:
-        raise ValueError(f"Файл больше {config.UPLOAD_MAX_MB} МБ")
+        raise ValueError(f"Файл больше {_max_mb()} МБ")
     if not content:
         raise ValueError("Сервер вернул пустой файл")
 
