@@ -54,7 +54,6 @@ services:
       - APP_TITLE=${APP_TITLE:-База знаний}
       - DOCS_BASE_URL=${DOCS_BASE_URL:-}
       - SITE_URL=${SITE_URL:-}
-      - PROMPTS_SEED_ON_START=${PROMPTS_SEED_ON_START:-1}
       # настраиваются в кабинете, значения по умолчанию — из .env
       - CHUNK_SIZE=${CHUNK_SIZE:-1000}
       - CHUNK_OVERLAP=${CHUNK_OVERLAP:-150}

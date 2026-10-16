@@ -15,7 +15,6 @@ EXTRACTED_DIR = os.getenv("EXTRACTED_DIR", "/data/extracted")
 UPLOADS_DIR = os.getenv("UPLOADS_DIR", "/data/uploads")
 EVAL_DIR = os.getenv("EVAL_DIR", "/data/eval")
 PROMPTS_DB = os.getenv("PROMPTS_DB", "/data/prompts/prompts.db")
-PROMPTS_SEED_ON_START = os.getenv("PROMPTS_SEED_ON_START", "1") not in ("0", "false", "False")
 PROMPTS_MAX = int(os.getenv("PROMPTS_MAX", "8"))
 
 SOURCE_ROOTS = [DOCS_DIR, EXTRACTED_DIR, UPLOADS_DIR]

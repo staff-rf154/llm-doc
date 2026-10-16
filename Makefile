@@ -1,4 +1,4 @@
-.PHONY: up down build ingest ingest-dry ask evaluate evaluate-ragas logs pull-llm ps clean chm reindex reindex-status reindex-pause reindex-resume seed-prompts prompts synonyms synonyms-expand seed-synonyms
+.PHONY: up down build ingest ingest-dry ask evaluate evaluate-ragas logs pull-llm ps clean chm reindex reindex-status reindex-pause reindex-resume prompts synonyms synonyms-expand seed-synonyms
 
 up:
 	docker compose up -d --build
@@ -41,7 +41,7 @@ reindex-resume:
 	curl -s -X POST localhost:$${APP_PORT:-8091}/reindex/resume
 
 seed-prompts:
-	docker compose run --rm app python prompts.py --replace
+	docker compose run --rm app python prompts.py
 
 prompts:
 	curl -s localhost:$${APP_PORT:-8091}/prompts

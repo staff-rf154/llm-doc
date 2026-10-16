@@ -476,13 +476,10 @@ curl -s -b cookie.txt -X POST localhost:8091/api/admin/training/run
 
 ## Windows и Linux в ответах
 
-Часть документации СёрчИнформ описана отдельно для разных ОС:
-`KIB_company_installation.pdf` и `KIB_company_installation_on_Linux.pdf`,
-`FileAuditor_installation.pdf` и `FileAuditor_installation_linux.pdf`,
-`dlp-capabilities-windows-company.pdf` и `dlp-capabilities-linux-company.pdf`,
-`ai-assistant-installation-windows/-linux-company.pdf`,
-`preparation_for_installation(-Linux).pdf`, `installation_SIEM.pdf` и
-`SIEM_installation_on_Linux.pdf`. Модуль `platforms.py` определяет платформу
+Часть документации описана отдельно для разных ОС: один и тот же документ имеет
+пару «общий / _linux», «_windows / _linux», а иногда имя отличается порядком слов
+(`installation_SIEM.pdf` и `SIEM_installation_on_Linux.pdf`). Модуль `platforms.py`
+определяет платформу
 документа по имени файла и находит парный документ, сравнивая имена без маркера
 ОС (`platforms.counterpart`).
 
@@ -737,7 +734,7 @@ make reindex          # если индексация на паузе, тоже 
 Результат кэшируется на `PROMPTS_CACHE_TTL` секунд.
 
 ```bash
-make seed-prompts   # пересоздать каталог в БД
+make prompts         # показать промты из БД
 make prompts        # посмотреть текущую выдачу
 ```
 
@@ -1079,7 +1076,7 @@ make evaluate-ragas  # дополнительно faithfulness, answer_relevancy
 | `make reindex` | фоновый запуск переиндексации через API |
 | `make reindex-status` | прогресс переиндексации |
 | `make reindex-pause` / `make reindex-resume` | пауза и продолжение индексации |
-| `make seed-prompts` | пересоздать каталог стартовых промтов |
+| `make prompts` | показать стартовые промты из БД |
 | `make prompts` | текущая выдача стартовых промтов |
 | `make synonyms` / `make synonyms-expand Q="..."` / `make seed-synonyms` | словарь синонимов |
 | `make ask Q="..."` | быстрый запрос из CLI |
@@ -1193,7 +1190,7 @@ ollama/models       веса локальных моделей
 - Долгий первый запуск — скачивается модель эмбеддингов (~1.1 ГБ) в
   `app/.cache`.
 - OOM на 7B в Ollama — используйте `qwen2.5:3b-instruct` или внешний API.
-- Промты не соответствуют документации — `make seed-prompts` и проверьте
+- Промты не соответствуют документации — правьте их в кабинете (вкладка «Стартовые промты»)
   состав источников: `curl -s localhost:8091/prompts | jq`.
 - Долгая индексация — увеличьте `INGEST_WORKERS` и `OMP_NUM_THREADS` под число
   ядер, поднимите `EMBED_BATCH`.
