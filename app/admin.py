@@ -9,7 +9,6 @@ import capabilities as capabilities_mod
 import config
 import corrections
 import docpages
-import exclusions
 import images
 import ingest
 import lessons
@@ -588,100 +587,6 @@ def images_status(user: dict = Depends(auth.require_admin)) -> dict:
 @router.post("/images/start", status_code=202)
 def images_start(user: dict = Depends(auth.require_admin)) -> dict:
     return images.job.start()
-
-
-class ExclusionCreate(BaseModel):
-    pattern: str = Field(min_length=1, max_length=200)
-    scope: str = Field(default="document", pattern="^(document|section|image|question)$")
-    document: str = ""
-    question: str = ""
-    page: int | None = None
-    comment: str = ""
-    auto_parse: bool = False
-
-
-@router.get("/exclusions")
-def list_exclusions(user: dict = Depends(auth.require_admin)) -> dict:
-    return {
-        "items": appdb.list_exclusions(),
-        "documents": [item["name"] for item in docpages.list_documents()],
-        "sections": sorted(
-            {
-                item["source"].rsplit("/", 1)[0]
-                for item in _indexed_items()
-                if "/" in item["source"]
-            }
-        ),
-        "scopes": [
-            {"value": value, "label": exclusions.SCOPE_LABELS[value]}
-            for value in exclusions.SCOPES
-        ],
-        "enabled": config.EXCLUSIONS_ENABLED,
-    }
-
-
-def _indexed_items() -> list[dict]:
-    try:
-        return [{"source": name} for name in vs.known_sources()]
-    except Exception:
-        return []
-
-
-@router.post("/exclusions", status_code=201)
-def create_exclusion(
-    payload: ExclusionCreate,
-    user: dict = Depends(auth.require_admin),
-) -> dict:
-    try:
-        if payload.auto_parse:
-            parsed = exclusions.parse_comment(payload.comment or payload.pattern)
-            created = []
-            for rule in parsed:
-                existing = appdb.get_exclusion_by_pattern(rule["pattern"])
-                item = existing or appdb.add_exclusion(
-                    rule["pattern"],
-                    origin="admin",
-                    author=user["username"],
-                    comment=payload.comment,
-                    scope=rule.get("scope", "document"),
-                    document=rule.get("document", ""),
-                    question=rule.get("question", ""),
-                    page=rule.get("page"),
-                )
-                if item:
-                    created.append(item)
-            return {"created": created}
-
-        existing = appdb.get_exclusion_by_pattern(payload.pattern)
-        if existing:
-            return existing
-        item = appdb.add_exclusion(
-            payload.pattern,
-            origin="admin",
-            author=user["username"],
-            comment=payload.comment,
-            scope=payload.scope,
-            document=payload.document or payload.pattern,
-            question=payload.question,
-            page=payload.page,
-        )
-    finally:
-        exclusions.invalidate()
-    return item or {}
-
-
-@router.delete("/exclusions/{exclusion_id}")
-def delete_exclusion(
-    exclusion_id: int,
-    user: dict = Depends(auth.require_admin),
-) -> dict:
-    try:
-        removed = appdb.delete_exclusion(exclusion_id)
-    finally:
-        exclusions.invalidate()
-    if not removed:
-        raise HTTPException(status_code=404, detail="Правило не найдено")
-    return {"ok": True}
 
 
 class CapabilitiesUpdate(BaseModel):

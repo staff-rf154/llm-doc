@@ -79,6 +79,33 @@ def build_reference(doc_name: str, doc_pages: str) -> str:
     return f"{doc_name}, с. {doc_pages}" if doc_pages else doc_name
 
 
+ACRONYMS = {
+    "api", "csv", "dll", "dns", "faq", "gui", "http", "https", "icap", "id",
+    "imap", "ip", "kib", "ldap", "os", "pdf", "pop3", "sdk", "siem", "smtp",
+    "sql", "ssl", "tls", "ui", "url", "utf", "vpn", "xml",
+}
+
+
+def human_title(source: str, title: str = "", kind: str = "file") -> str:
+    """Полное название документа по имени файла: siem_help.pdf → SIEM Help."""
+    name = (source or "").strip()
+    if not name:
+        return title.strip()
+    if name.startswith("web/"):
+        host = name.split("/", 2)[1] if name.count("/") >= 2 else name[4:]
+        clean = title.strip()
+        if clean and len(clean) > 2 and clean.lower() not in host.lower():
+            return clean
+        return host or name
+    stem = Path(name).stem or name
+    words = [w for w in re.split(r"[\s_\-]+", stem) if w]
+    parts = []
+    for word in words:
+        lower = word.lower()
+        parts.append(lower.upper() if lower in ACRONYMS else word[:1].upper() + word[1:])
+    return " ".join(parts) if parts else name
+
+
 def _pdf_page_text(path: str, start: int, end: int) -> str:
     reader = PdfReader(path)
     total = len(reader.pages)

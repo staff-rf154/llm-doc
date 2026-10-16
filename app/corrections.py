@@ -109,14 +109,6 @@ def search(question: str, limit: int = 3) -> list[dict]:
         ).points
     except Exception:
         return []
-    excluded: list[str] = []
-    try:
-        import exclusions
-
-        if config.EXCLUSIONS_ENABLED:
-            excluded = exclusions.patterns()
-    except Exception:
-        excluded = []
     return [
         {
             "correction_id": int((p.payload or {}).get("correction_id", p.id)),
@@ -130,11 +122,6 @@ def search(question: str, limit: int = 3) -> list[dict]:
             "score": float(p.score),
         }
         for p in points
-        if not any(
-            (p.payload or {}).get("doc_name", "").lower().endswith(pattern)
-            or pattern in (p.payload or {}).get("doc_name", "").lower()
-            for pattern in excluded
-        )
     ]
 
 

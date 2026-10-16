@@ -59,6 +59,67 @@ class Answer:
 NO_ANSWER_MARKER = "нет информации"
 
 
+def document_name(chunk: RetrievedChunk) -> str:
+    """Полное название документа, из которого взят фрагмент."""
+    import docpages
+
+    return docpages.human_title(chunk.source, chunk.title, chunk.kind)
+
+
+def sources_block(chunks: list[RetrievedChunk]) -> str:
+    """Блок с полными названиями документов и рекомендацией изучить их детально."""
+    documents: dict[str, dict] = {}
+    for chunk in chunks:
+        entry = documents.setdefault(
+            chunk.source,
+            {"name": document_name(chunk), "pages": set(), "url": chunk.url},
+        )
+        if chunk.page:
+            entry["pages"].add(int(chunk.page))
+        if not entry["url"] and chunk.url:
+            entry["url"] = chunk.url
+    if not documents:
+        return ""
+    lines = []
+    for source, entry in documents.items():
+        pages = ", ".join(str(page) for page in sorted(entry["pages"]))
+        line = entry["name"]
+        if source and source != entry["name"]:
+            line += f" ({source})"
+        if pages:
+            line += f", с. {pages}"
+        if entry["url"]:
+            line += f" — {entry['url']}"
+        lines.append(f"- {line}")
+    plural = "этими документами" if len(lines) > 1 else "этим документом"
+    return (
+        "\n\nДокументация, из которой взят ответ:\n"
+        + "\n".join(lines)
+        + f"\n\nРекомендую детально ознакомиться с {plural} — там описаны детали, "
+        "шаги и настройки, которых нет в кратком ответе."
+    )
+
+
+def reference_block(doc_name: str, doc_pages: str) -> str:
+    """Блок с названием документа для ответа, взятого из исправления администратора."""
+    doc_name = (doc_name or "").strip()
+    if not doc_name:
+        return ""
+    import docpages
+
+    title = docpages.human_title(doc_name)
+    line = title if title == doc_name else f"{title} ({doc_name})"
+    pages = (doc_pages or "").strip()
+    if pages:
+        line += f", с. {pages}"
+    return (
+        "\n\nДокументация, из которой взят ответ:\n"
+        f"- {line}"
+        + "\n\nРекомендую детально ознакомиться с этим документом — "
+        "там описаны детали, шаги и настройки, которых нет в кратком ответе."
+    )
+
+
 def query_variants(query: str) -> list[str]:
     """Варианты поискового запроса с подстановкой синонимов из словаря."""
     try:
@@ -102,13 +163,6 @@ def retrieve(query: str, top_k: int | None = None) -> list[RetrievedChunk]:
                 merged[key] = chunk
 
     ordered = sorted(merged.values(), key=lambda c: c.score, reverse=True)
-    if config.EXCLUSIONS_ENABLED:
-        try:
-            import exclusions
-
-            ordered = exclusions.filter_chunks(ordered, query)
-        except Exception:
-            pass
     return ordered[:top_k]
 
 
@@ -119,7 +173,12 @@ def build_prompt(
 ) -> str:
     blocks = []
     for chunk in chunks:
-        blocks.append(f"<fragment id=\"{chunk.citation}\">\n{chunk.text}\n</fragment>")
+        name = document_name(chunk)
+        blocks.append(
+            f"<fragment id=\"{chunk.citation}\">\n"
+            f"Документ: {name} ({chunk.source})\n"
+            f"{chunk.text}\n</fragment>"
+        )
     lessons = lesson_examples(question)
     blocks_lessons = ""
     if lessons:
@@ -207,8 +266,11 @@ def ask(question: str, top_k: int | None = None) -> Answer:
 
     exact = find_correction(question)
     if exact:
+        answer = exact["answer"] + reference_block(
+            exact.get("doc_name", ""), exact.get("doc_pages", "")
+        )
         return Answer(
-            text=exact["answer"],
+            text=answer,
             chunks=[],
             grounded=True,
             corrected=True,
@@ -244,4 +306,6 @@ def ask(question: str, top_k: int | None = None) -> Answer:
     )
     text = (completion.choices[0].message.content or "").strip()
     grounded = NO_ANSWER_MARKER not in text.lower()
+    if grounded:
+        text += sources_block(chunks)
     return Answer(text=text, chunks=chunks, grounded=grounded)

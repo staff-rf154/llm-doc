@@ -253,20 +253,10 @@ def rate(
     user: dict = Depends(auth.require_user),
 ) -> dict:
     appdb.set_rating(request_id, payload.vote, payload.comment)
-    excluded: list[dict] = []
-    if payload.comment:
-        import exclusions
-
-        excluded = exclusions.add_from_comment(
-            payload.comment,
-            author=user["username"],
-            request_id=request_id,
-        )
     return {
         "ok": True,
         "request_id": request_id,
         "vote": payload.vote,
-        "excluded": [item["pattern"] for item in excluded],
     }
 
 

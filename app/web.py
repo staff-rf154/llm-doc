@@ -71,6 +71,9 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
 
     exact = rag.find_correction(question)
     if exact:
+        answer_text = exact["answer"] + rag.reference_block(
+            exact.get("doc_name", ""), exact.get("doc_pages", "")
+        )
         reference = {
             "doc_name": exact.get("doc_name", ""),
             "doc_pages": exact.get("doc_pages", ""),
@@ -80,11 +83,11 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
             "correction_id": exact.get("correction_id", 0),
         }
         request_id = appdb.log_request(
-            user, question, exact["answer"], True, True, 0,
+            user, question, answer_text, True, True, 0,
             int((time.time() - started) * 1000), reference,
         )
         payload = [
-            {"type": "token", "data": exact["answer"]},
+            {"type": "token", "data": answer_text},
             {"type": "sources", "data": []},
             {"type": "reference", "data": reference},
             {"type": "request", "data": {"request_id": request_id}},
@@ -138,6 +141,10 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
 
         answer = "".join(answer_parts).strip()
         grounded = rag.NO_ANSWER_MARKER not in answer.lower()
+        block = rag.sources_block(chunks) if grounded else ""
+        if block:
+            yield _sse_event({"type": "token", "data": block})
+            answer += block
         request_id = appdb.log_request(
             user,
             question,

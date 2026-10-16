@@ -118,6 +118,22 @@
   .lesson .muted { margin-bottom: 4px; }
   .lesson .focus { color: var(--accent); }
   .lesson .row { margin-top: 6px; margin-bottom: 0; }
+  .lesson-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    user-select: none;
+  }
+  .lesson-head .mark { color: var(--muted); font-size: 12px; }
+  .lesson-head .topic { margin-bottom: 0; flex: 1; }
+  .lesson-body { margin-top: 8px; }
+  .pager {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 10px;
+  }
   .edit { display: grid; gap: 8px; }
   textarea { min-height: 90px; resize: vertical; }
   .hidden { display: none; }
@@ -133,7 +149,6 @@
     <button data-tab="corrections">Исправления</button>
     <button data-tab="synonyms">Синонимы</button>
     <button data-tab="train">Обучение</button>
-    <button data-tab="exclusions">Исключения</button>
     <button data-tab="settings">Настройки</button>
     <button data-tab="index">Индексация</button>
   </nav>
@@ -286,6 +301,7 @@
             <span class="muted" id="lesson-count"></span>
           </div>
           <div id="lesson-list"></div>
+          <div class="pager" id="lesson-pager"></div>
         </div>
       </div>
       <form id="train-form" class="row" style="margin-top:12px">
@@ -310,38 +326,6 @@
       </div>
       <table id="training-table">
         <thead><tr><th>Источник</th><th>Вопрос</th><th>Ссылка</th><th>Тема урока</th><th>Статус</th><th>Когда</th></tr></thead>
-        <tbody></tbody>
-      </table>
-    </div>
-  </section>
-
-  <section id="tab-exclusions" class="tab hidden">
-    <div class="card">
-      <h2>Исключить документ из ответов</h2>
-      <div class="muted" style="margin-bottom:12px">
-        Фрагменты этих документов не попадут в ответ. Правила можно добавлять вручную —
-        они же появляются автоматически, если пользователь в комментарии к оценке
-        напишет, например: «исключить из ответа FileAuditor_manual.pdf, SIEM_help.pdf».
-      </div>
-      <div class="row">
-        <select id="exc-scope" style="max-width:260px"></select>
-        <select id="exc-doc" style="max-width:380px"></select>
-        <input id="exc-pattern" placeholder="Имя файла, раздела или имя файла картинки" style="max-width:260px">
-        <input id="exc-page" type="number" min="1" placeholder="Страница" style="max-width:110px">
-        <input id="exc-question" placeholder="Для какого вопроса (если вид «Для вопроса»)" style="max-width:260px">
-        <button class="primary" id="exc-add">Добавить исключение</button>
-      </div>
-      <div class="row">
-        <input id="exc-comment" placeholder="Комментарий: система сама разберёт фразы вроде «исключить картинку SIEM_help.pdf с. 34»" style="max-width:720px">
-        <label class="switch"><input type="checkbox" id="exc-parse"><span>Разобрать комментарий</span></label>
-        <button id="exc-parse-add">Добавить из комментария</button>
-        <span class="muted" id="exc-msg"></span>
-      </div>
-    </div>
-    <div class="card">
-      <h2>Список исключений</h2>
-      <table id="exc-table">
-        <thead><tr><th>Вид</th><th>Что исключаем</th><th>Документ</th><th>Страница</th><th>Вопрос</th><th>Источник</th><th>Упоминаний</th><th>Добавлено</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -485,7 +469,6 @@ function loadTab(tab) {
   if (tab === 'requests') loadRequests();
   if (tab === 'corrections') loadCorrections();
   if (tab === 'synonyms') loadSynonyms();
-  if (tab === 'exclusions') loadExclusions();
   if (tab === 'train') { loadLessons(); loadTraining(); }
   if (tab === 'settings') { loadSettings(); loadCapabilities(); loadImages(); }
   if (tab === 'index') { loadIndex(); loadSites(); }
@@ -777,109 +760,6 @@ function editAnswer(item) {
 
 let imageTimer = null;
 
-let excScopes = [];
-
-async function loadExclusions() {
-  const data = await j('/api/admin/exclusions');
-  excScopes = data.scopes || [];
-  const scopeSelect = document.getElementById('exc-scope');
-  const previousScope = scopeSelect.value;
-  while (scopeSelect.firstChild) scopeSelect.removeChild(scopeSelect.firstChild);
-  excScopes.forEach(scope => {
-    const option = document.createElement('option');
-    option.value = scope.value;
-    option.textContent = scope.label;
-    scopeSelect.appendChild(option);
-  });
-  if (previousScope) scopeSelect.value = previousScope;
-
-  const docSelect = document.getElementById('exc-doc');
-  const previous = docSelect.value;
-  while (docSelect.firstChild) docSelect.removeChild(docSelect.firstChild);
-  const scope = scopeSelect.value;
-  const options = scope === 'section' ? (data.sections || []) : (data.documents || []);
-  options.forEach(name => {
-    const option = document.createElement('option');
-    option.value = name;
-    option.textContent = name;
-    docSelect.appendChild(option);
-  });
-  if (previous) docSelect.value = previous;
-  document.getElementById('exc-msg').textContent = '';
-
-  const body = document.querySelector('#exc-table tbody');
-  while (body.firstChild) body.removeChild(body.firstChild);
-  (data.items || []).forEach(item => {
-    const label = (excScopes.find(s => s.value === item.scope) || {}).label || item.scope;
-    body.appendChild(el('tr', {}, [
-      el('td', { textContent: label }),
-      el('td', { textContent: item.pattern }),
-      el('td', { textContent: item.document || '—' }),
-      el('td', { textContent: item.page || '—' }),
-      el('td', { textContent: item.question || '—' }),
-      el('td', { textContent: (item.origin === 'comment' ? 'из комментария' : 'администратор') + (item.author ? ' · ' + item.author : '') }),
-      el('td', { textContent: item.mentions || 0 }),
-      el('td', { textContent: item.created_at }),
-      el('td', {}, [
-        el('button', {
-          className: 'danger',
-          textContent: 'Удалить',
-          onclick: async () => {
-            if (!confirm('Вернуть в ответы?')) return;
-            await j('/api/admin/exclusions/' + item.id, { method: 'DELETE' });
-            loadExclusions();
-          }
-        })
-      ])
-    ]));
-  });
-}
-
-document.getElementById('exc-scope').addEventListener('change', loadExclusions);
-
-document.getElementById('exc-add').addEventListener('click', async () => {
-  const msg = document.getElementById('exc-msg');
-  const typed = document.getElementById('exc-pattern').value.trim();
-  const document_ = typed || document.getElementById('exc-doc').value;
-  if (!document_) { msg.textContent = 'Укажите документ'; return; }
-  const pageRaw = document.getElementById('exc-page').value.trim();
-  try {
-    await j('/api/admin/exclusions', {
-      method: 'POST',
-      body: JSON.stringify({
-        pattern: document_.toLowerCase(),
-        scope: document.getElementById('exc-scope').value,
-        document: document_,
-        question: document.getElementById('exc-question').value.trim(),
-        page: pageRaw ? parseInt(pageRaw, 10) : null,
-        comment: document.getElementById('exc-comment').value
-      })
-    });
-    msg.textContent = 'Исключено: ' + document_;
-    document.getElementById('exc-pattern').value = '';
-    document.getElementById('exc-page').value = '';
-    document.getElementById('exc-question').value = '';
-    document.getElementById('exc-comment').value = '';
-    loadExclusions();
-  } catch (err) { msg.textContent = err.message; }
-});
-
-document.getElementById('exc-parse-add').addEventListener('click', async () => {
-  const msg = document.getElementById('exc-msg');
-  const comment = document.getElementById('exc-comment').value.trim();
-  if (!comment) { msg.textContent = 'Введите комментарий'; return; }
-  try {
-    const res = await j('/api/admin/exclusions', {
-      method: 'POST',
-      body: JSON.stringify({ pattern: comment, scope: 'document', comment, auto_parse: true })
-    });
-    const created = (res.created || []).map(item => item.pattern + (item.page ? ' с. ' + item.page : ''));
-    msg.textContent = created.length ? 'Добавлено: ' + created.join(', ') : 'Ничего не распознано';
-    document.getElementById('exc-comment').value = '';
-    loadExclusions();
-  } catch (err) { msg.textContent = err.message; }
-});
-
 let crawlTimer = null;
 let sitesData = [];
 
@@ -1071,6 +951,7 @@ function renderLessonDraft(draft) {
           });
           document.getElementById('train-msg').textContent = 'Урок сохранён и применён ко всем ответам';
           box.innerHTML = '';
+          lessonPage = 1;
           loadLessons();
         } catch (err) { document.getElementById('train-msg').textContent = err.message; }
       }
@@ -1121,18 +1002,26 @@ document.getElementById('training-run').addEventListener('click', async () => {
   setTimeout(loadTraining, 2000);
 });
 
+const LESSON_PAGE_SIZE = 10;
+let lessonPage = 1;
+const lessonOpen = new Set();
+
 async function loadLessons() {
   const data = await j('/api/admin/lessons');
   const query = document.getElementById('lesson-search').value.trim().toLowerCase();
   const items = (data.items || []).filter(item =>
     !query || item.topic.toLowerCase().includes(query) || item.question.toLowerCase().includes(query));
   document.getElementById('lesson-count').textContent =
-    'уроков: ' + data.total + ', активных: ' + data.active;
+    'уроков: ' + data.total + ', активных: ' + data.active
+    + (query ? ', найдено: ' + items.length : '');
+  const pages = Math.max(1, Math.ceil(items.length / LESSON_PAGE_SIZE));
+  if (lessonPage > pages) lessonPage = pages;
+  const start = (lessonPage - 1) * LESSON_PAGE_SIZE;
   const list = document.getElementById('lesson-list');
   while (list.firstChild) list.removeChild(list.firstChild);
-  items.forEach(item => {
-    list.appendChild(el('div', { className: 'lesson' }, [
-      el('div', { className: 'topic', textContent: item.topic }),
+  items.slice(start, start + LESSON_PAGE_SIZE).forEach(item => {
+    const open = lessonOpen.has(item.id);
+    const body = el('div', { className: 'lesson-body' }, [
       item.question ? el('div', { className: 'muted', textContent: 'Вопрос: ' + item.question }) : document.createTextNode(''),
       el('div', { textContent: item.answer }),
       item.focus ? el('div', { className: 'focus', textContent: 'Обратить внимание: ' + item.focus }) : document.createTextNode(''),
@@ -1153,16 +1042,47 @@ async function loadLessons() {
           textContent: 'Удалить',
           onclick: async () => {
             if (!confirm('Удалить урок?')) return;
+            lessonOpen.delete(item.id);
             await j('/api/admin/lessons/' + item.id, { method: 'DELETE' });
             loadLessons();
           }
         })
       ])
-    ]));
+    ]);
+    if (!open) body.classList.add('hidden');
+    const head = el('div', { className: 'lesson-head' }, [
+      el('span', { className: 'mark', textContent: open ? '▾' : '▸' }),
+      el('span', { className: 'topic', textContent: item.topic }),
+      item.status === 'active' ? document.createTextNode('') : el('span', { className: 'muted', textContent: 'выключен' })
+    ]);
+    head.addEventListener('click', () => {
+      if (lessonOpen.has(item.id)) lessonOpen.delete(item.id);
+      else lessonOpen.add(item.id);
+      loadLessons();
+    });
+    list.appendChild(el('div', { className: 'lesson' }, [head, body]));
   });
+
+  const pager = document.getElementById('lesson-pager');
+  while (pager.firstChild) pager.removeChild(pager.firstChild);
+  if (pages < 2) return;
+  pager.appendChild(el('button', {
+    textContent: 'Назад',
+    disabled: lessonPage === 1,
+    onclick: () => { lessonPage -= 1; loadLessons(); }
+  }));
+  pager.appendChild(el('span', { className: 'muted', textContent: 'Страница ' + lessonPage + ' из ' + pages }));
+  pager.appendChild(el('button', {
+    textContent: 'Вперёд',
+    disabled: lessonPage === pages,
+    onclick: () => { lessonPage += 1; loadLessons(); }
+  }));
 }
 
-document.getElementById('lesson-search').addEventListener('input', loadLessons);
+document.getElementById('lesson-search').addEventListener('input', () => {
+  lessonPage = 1;
+  loadLessons();
+});
 
 async function loadCapabilities() {
   const data = await j('/api/admin/capabilities');

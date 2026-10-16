@@ -68,20 +68,6 @@ CREATE TABLE IF NOT EXISTS corrections (
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
 );
-CREATE TABLE IF NOT EXISTS exclusions (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    pattern TEXT NOT NULL,
-    scope TEXT NOT NULL DEFAULT 'document',
-    document TEXT NOT NULL DEFAULT '',
-    question TEXT NOT NULL DEFAULT '',
-    source_name TEXT NOT NULL DEFAULT '',
-    origin TEXT NOT NULL DEFAULT 'admin',
-    author TEXT NOT NULL DEFAULT '',
-    comment TEXT NOT NULL DEFAULT '',
-    request_id INTEGER,
-    created_at TEXT NOT NULL
-);
-CREATE INDEX IF NOT EXISTS idx_exclusions_pattern ON exclusions(pattern);
 CREATE TABLE IF NOT EXISTS lessons (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     topic TEXT NOT NULL,
@@ -114,7 +100,6 @@ CREATE TABLE IF NOT EXISTS settings (
 CREATE INDEX IF NOT EXISTS idx_corrections_status ON corrections(status);
 """
 
-EXCLUSION_COLUMNS = ("scope", "document", "question", "page")
 CORRECTION_COLUMNS = ("doc_name", "doc_pages", "doc_ref")
 CHECK_COLUMNS = ("check_status", "check_comment", "checked_at", "check_collection")
 REQUEST_COLUMNS = ("doc_name", "doc_pages", "doc_ref")
@@ -124,7 +109,6 @@ CHECK_STATUSES = ("unchecked", "verified", "review")
 
 def _migrate(conn: sqlite3.Connection) -> None:
     for table, columns in (
-        ("exclusions", EXCLUSION_COLUMNS),
         ("corrections", CORRECTION_COLUMNS),
         ("corrections", CHECK_COLUMNS),
         ("requests", REQUEST_COLUMNS),
@@ -404,99 +388,6 @@ def list_requests(
     with connect() as conn:
         rows = conn.execute(query, params).fetchall()
     return [dict(row) for row in rows]
-
-
-def add_exclusion(
-    pattern: str,
-    origin: str = "admin",
-    author: str = "",
-    comment: str = "",
-    request_id: int | None = None,
-    scope: str = "document",
-    document: str = "",
-    question: str = "",
-    page: int | None = None,
-) -> dict | None:
-    ensure_schema()
-    pattern = pattern.strip()
-    if scope == "question" and question.strip():
-        pattern = question.strip()
-    if not pattern:
-        return None
-    with _LOCK, connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO exclusions
-                (pattern, scope, document, question, page, source_name, origin, author,
-                 comment, request_id, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                pattern.lower(),
-                scope,
-                document.strip().lower(),
-                question.strip().lower(),
-                page if page is not None else 0,
-                find_source_name(pattern) if scope in ("document", "section", "image") else "",
-                origin,
-                author,
-                comment[:500],
-                request_id,
-                now(),
-            ),
-        )
-    return get_exclusion_by_pattern(pattern)
-
-
-def get_exclusion_by_pattern(pattern: str) -> dict | None:
-    ensure_schema()
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT * FROM exclusions WHERE pattern = ?", (pattern.strip().lower(),)
-        ).fetchone()
-    return dict(row) if row else None
-
-
-def list_exclusions() -> list[dict]:
-    ensure_schema()
-    with connect() as conn:
-        rows = conn.execute(
-            """
-            SELECT e.id, e.pattern, e.scope, e.document, e.question, e.page, e.source_name,
-                   e.origin, e.author, e.comment, e.request_id, e.created_at,
-                   (SELECT COUNT(*) FROM requests r
-                     WHERE r.doc_name = e.source_name OR r.doc_ref LIKE '%' || e.source_name || '%')
-                     AS mentions
-            FROM exclusions e ORDER BY e.id DESC
-            """
-        ).fetchall()
-    return [dict(row) for row in rows]
-
-
-def delete_exclusion(exclusion_id: int) -> bool:
-    ensure_schema()
-    with _LOCK, connect() as conn:
-        cur = conn.execute("DELETE FROM exclusions WHERE id = ?", (exclusion_id,))
-    return bool(cur.rowcount)
-
-
-def find_source_name(pattern: str) -> str:
-    """Совпадает ли шаблон с именем документа из индекса; вернём найденное имя."""
-    pattern = pattern.strip().lower()
-    try:
-        import vectorstore as vs
-
-        names = {name.lower() for name in vs.known_sources()}
-    except Exception:
-        names = set()
-    if not names:
-        return ""
-    if pattern in names:
-        return pattern
-    for name in names:
-        if name.endswith(pattern) or pattern in name:
-            return name
-    return ""
 
 
 def create_lesson(

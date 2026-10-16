@@ -165,12 +165,6 @@ def _pdf_files() -> list[tuple[str, Path]]:
             continue
         for path in sorted(root_path.rglob("*.pdf")):
             items.append((str(path.relative_to(root_path)), path))
-    try:
-        import exclusions
-
-        items = exclusions.excluded_images(items)
-    except Exception:
-        pass
     return items
 
 

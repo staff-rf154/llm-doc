@@ -46,8 +46,6 @@ IMAGE_PER_PAGE = int(os.getenv("IMAGE_PER_PAGE", "2"))
 IMAGE_PER_DOC = int(os.getenv("IMAGE_PER_DOC", "20"))
 IMAGE_SKIP_FULLPAGE = float(os.getenv("IMAGE_SKIP_FULLPAGE", "0.6"))
 IMAGE_SEARCH_ENABLED = os.getenv("IMAGE_SEARCH_ENABLED", "1") not in ("0", "false", "False")
-EXCLUSIONS_CACHE_TTL = int(os.getenv("EXCLUSIONS_CACHE_TTL", "60"))
-EXCLUSION_QUESTION_THRESHOLD = float(os.getenv("EXCLUSION_QUESTION_THRESHOLD", "0.85"))
 LESSONS_COLLECTION = os.getenv("LESSONS_COLLECTION", "lessons")
 TRAINING_FROM_CORRECTIONS = os.getenv("TRAINING_FROM_CORRECTIONS", "1") not in ("0", "false", "False")
 LESSONS_MAX = int(os.getenv("LESSONS_MAX", "2"))
@@ -57,7 +55,6 @@ WEB_CRAWL_TIMEOUT = int(os.getenv("WEB_CRAWL_TIMEOUT", "20"))
 WEB_CRAWL_DELAY_MS = int(os.getenv("WEB_CRAWL_DELAY_MS", "500"))
 WEB_CRAWL_RESPECT_ROBOTS = os.getenv("WEB_CRAWL_RESPECT_ROBOTS", "1") not in ("0", "false", "False")
 WEB_CRAWL_USER_AGENT = os.getenv("WEB_CRAWL_USER_AGENT", "Mozilla/5.0 (compatible; DocsBot/1.0)")
-EXCLUSIONS_ENABLED = os.getenv("EXCLUSIONS_ENABLED", "1") not in ("0", "false", "False")
 INGEST_CHECKPOINT_EVERY = int(os.getenv("INGEST_CHECKPOINT_EVERY", "64"))
 INGEST_BATCH_SIZE = int(os.getenv("INGEST_BATCH_SIZE", "64"))
 INGEST_WORKERS = int(os.getenv("INGEST_WORKERS", "8"))
@@ -72,6 +69,9 @@ SYSTEM_PROMPT = (
     "'В документации нет информации по этому вопросу'. "
     "Не выдумывай факты. Отвечай на языке вопроса. "
     "Указывай источники в формате [doc:chunk]. "
+    "Называй в тексте ответа полное название документа, из которого взята "
+    "информация (например, «SIEM Help», а не «документ» или «файл»), и "
+    "рекомендуй детально ознакомиться с этим документом."
     "Если пользователь спрашивает, что ты умеешь, перечисли свои возможности: "
     "работа с текстом и информацией, ответы на вопросы простыми словами, "
     "написание, редактирование, сокращение и перевод текстов, анализ документов, "
