@@ -1,5 +1,5 @@
 {
-  "description": "Эталонные вопросы по документации company. Заполните answer — короткий эталонный ответ из документации; он нужен для exact_match и метрик RAGAS. Пустой answer не влияет на grounded_rate и context_recall.",
+  "description": "Эталонные вопросы по документации. Заполните answer — короткий эталонный ответ из документации; он нужен для exact_match и метрик RAGAS. Пустой answer не влияет на grounded_rate и context_recall.",
   "items": [
     {
       "question": "Как создать и настроить ICAP-сервис в консоли администрирования?",
@@ -18,7 +18,7 @@
       "answer": ""
     },
     {
-      "question": "Как выполнить миграцию на KIB company?",
+      "question": "Как выполнить миграцию на платформу?",
       "answer": ""
     },
     {
