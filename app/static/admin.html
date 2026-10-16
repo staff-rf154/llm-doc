@@ -127,6 +127,8 @@
   }
   .lesson-head .mark { color: var(--muted); font-size: 12px; }
   .lesson-head .topic { margin-bottom: 0; flex: 1; }
+  .lesson-head .q { flex: 1; }
+  .lesson-head .muted { margin-bottom: 0; white-space: nowrap; }
   .lesson-body { margin-top: 8px; }
   .pager {
     display: flex;
@@ -150,6 +152,7 @@
     <button data-tab="synonyms">Синонимы</button>
     <button data-tab="train">Обучение</button>
     <button data-tab="settings">Настройки</button>
+    <button data-tab="docs">Документация</button>
     <button data-tab="index">Индексация</button>
   </nav>
   <div class="spacer"></div>
@@ -197,6 +200,10 @@
           <option value="down">Дизлайк</option>
           <option value="up">Лайк</option>
         </select>
+        <select id="req-user" style="max-width:190px">
+          <option value="">Все пользователи</option>
+          <option value="__system__">Системные (не из web)</option>
+        </select>
         <select id="req-sort" style="max-width:190px">
           <option value="date">Сортировка: по дате</option>
           <option value="vote">Сортировка: по оценке</option>
@@ -208,6 +215,7 @@
         <button id="req-reload">Обновить</button>
       </div>
       <div id="req-list"></div>
+      <div class="pager" id="req-pager"></div>
     </div>
   </section>
 
@@ -388,6 +396,34 @@
     </div>
   </section>
 
+  <section id="tab-docs" class="tab hidden">
+    <div class="card">
+      <h2>Документация</h2>
+      <div class="muted" style="margin-bottom:10px">
+        Файлы из data/docs и data/extracted. Свои документы можно загрузить с компьютера
+        или скачать по прямой ссылке — они попадают в папку data/uploads и сразу
+        индексируются. Удаление убирает файл и его фрагменты из индекса.
+      </div>
+      <div class="row">
+        <input type="file" id="doc-file" style="max-width:340px">
+        <button class="primary" id="doc-upload">Загрузить с ПК</button>
+        <span class="muted" id="doc-msg"></span>
+      </div>
+      <div class="row">
+        <input id="doc-url" placeholder="Прямая ссылка на файл, например https://docs.example.org/MongoDB_update.pdf" style="max-width:560px">
+        <button id="doc-fetch">Скачать по ссылке</button>
+      </div>
+      <div class="row">
+        <input id="doc-search" placeholder="Поиск по имени документа" style="max-width:260px">
+        <span class="muted" id="doc-count"></span>
+      </div>
+      <table id="doc-table">
+        <thead><tr><th>Документ</th><th>Формат</th><th>Размер</th><th>Фрагментов</th><th>Изменён</th><th>Источник</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+  </section>
+
   <section id="tab-index" class="tab hidden">
     <div class="card">
       <h2>Индексация документации</h2>
@@ -434,7 +470,10 @@
 </main>
 
 <script>
-const state = { reqFilter: '', reqSearch: '', reqSort: 'date', reqOrder: 'desc' };
+const state = { reqFilter: '', reqSearch: '', reqUser: '', reqSort: 'date', reqOrder: 'desc' };
+const REQ_PAGE_SIZE = 10;
+let reqPage = 1;
+const reqOpen = new Set();
 
 function j(url, options) {
   return fetch(url, Object.assign({ headers: { 'Content-Type': 'application/json' } }, options || {}))
@@ -466,12 +505,13 @@ document.querySelectorAll('nav button').forEach(btn => {
 function loadTab(tab) {
   if (tab === 'overview') loadOverview();
   if (tab === 'users') loadUsers();
-  if (tab === 'requests') loadRequests();
+  if (tab === 'requests') { fillRequestUsers(); loadRequests(); }
   if (tab === 'corrections') loadCorrections();
   if (tab === 'synonyms') loadSynonyms();
   if (tab === 'train') { loadLessons(); loadTraining(); }
   if (tab === 'settings') { loadSettings(); loadCapabilities(); loadImages(); }
   if (tab === 'index') { loadIndex(); loadSites(); }
+  if (tab === 'docs') loadDocs();
 }
 
 document.getElementById('back').addEventListener('click', () => location.href = '/');
@@ -627,38 +667,51 @@ async function removeUser(id, username) {
 
 document.getElementById('req-filter').addEventListener('change', e => {
   state.reqFilter = e.target.value;
+  reqPage = 1;
   loadRequests();
 });
 document.getElementById('req-sort').addEventListener('change', e => {
   state.reqSort = e.target.value;
+  reqPage = 1;
   loadRequests();
 });
 document.getElementById('req-order').addEventListener('click', () => {
   state.reqOrder = state.reqOrder === 'desc' ? 'asc' : 'desc';
   document.getElementById('req-order').textContent =
     state.reqOrder === 'desc' ? '↓ по убыванию' : '↑ по возрастанию';
+  reqPage = 1;
   loadRequests();
 });
 document.getElementById('req-search').addEventListener('input', e => {
   state.reqSearch = e.target.value;
+  reqPage = 1;
 });
-document.getElementById('req-reload').addEventListener('click', loadRequests);
+document.getElementById('req-reload').addEventListener('click', () => { reqPage = 1; loadRequests(); });
 
 async function loadRequests() {
-  const params = new URLSearchParams({ limit: '50', sort: state.reqSort, order: state.reqOrder });
+  const params = new URLSearchParams({
+    limit: String(REQ_PAGE_SIZE),
+    offset: String((reqPage - 1) * REQ_PAGE_SIZE),
+    sort: state.reqSort,
+    order: state.reqOrder
+  });
   if (state.reqFilter) params.set('vote', state.reqFilter);
   if (state.reqSearch) params.set('search', state.reqSearch);
+  if (state.reqUser === '__system__') params.set('origin', 'api');
+  else if (state.reqUser) params.set('username', state.reqUser);
   const data = await j('/api/admin/requests?' + params.toString());
   const list = document.getElementById('req-list');
   while (list.firstChild) list.removeChild(list.firstChild);
+  const pages = Math.max(1, Math.ceil((data.total || 0) / REQ_PAGE_SIZE));
+  if (reqPage > pages) reqPage = pages;
   list.appendChild(el('div', { className: 'muted', textContent: 'Всего: ' + data.total }));
   data.items.forEach(item => {
     const vote = item.vote
       ? el('span', { className: 'pill ' + item.vote, textContent: item.vote === 'up' ? '👍' : '👎' })
       : el('span', { className: 'muted', textContent: 'без оценки' });
-    const box = el('div', { className: 'card' }, [
-      el('div', { className: 'muted', textContent: item.created_at + ' · ' + (item.username || 'гость') + ' · ' + item.latency_ms + ' мс · ' + item.sources + ' источников' }),
-      el('div', { className: 'q', textContent: item.question }),
+    const author = item.is_system ? 'системный запрос' : (item.username || 'гость');
+    const open = reqOpen.has(item.id);
+    const body = el('div', { className: 'lesson-body' }, [
       el('div', { className: 'a', textContent: item.answer }),
       el('div', {}, [
         vote,
@@ -677,9 +730,57 @@ async function loadRequests() {
         el('button', { textContent: 'Исправить ответ', onclick: () => editAnswer(item) })
       ])
     ]);
-    list.appendChild(box);
+    if (!open) body.classList.add('hidden');
+    const head = el('div', { className: 'lesson-head' }, [
+      el('span', { className: 'mark', textContent: open ? '▾' : '▸' }),
+      el('span', { className: 'q', textContent: item.question }),
+      item.is_system ? el('span', { className: 'muted', textContent: 'системный' }) : document.createTextNode('')
+    ]);
+    head.addEventListener('click', () => {
+      if (reqOpen.has(item.id)) reqOpen.delete(item.id);
+      else reqOpen.add(item.id);
+      loadRequests();
+    });
+    list.appendChild(el('div', { className: 'card' }, [
+      el('div', { className: 'muted', textContent: item.created_at + ' · ' + author + ' · ' + item.latency_ms + ' мс · ' + item.sources + ' источников' }),
+      head,
+      body
+    ]));
   });
+
+  const pager = document.getElementById('req-pager');
+  while (pager.firstChild) pager.removeChild(pager.firstChild);
+  if (pages < 2) return;
+  pager.appendChild(el('button', {
+    textContent: 'Назад',
+    disabled: reqPage === 1,
+    onclick: () => { reqPage -= 1; loadRequests(); }
+  }));
+  pager.appendChild(el('span', { className: 'muted', textContent: 'Страница ' + reqPage + ' из ' + pages }));
+  pager.appendChild(el('button', {
+    textContent: 'Вперёд',
+    disabled: reqPage === pages,
+    onclick: () => { reqPage += 1; loadRequests(); }
+  }));
 }
+
+async function fillRequestUsers() {
+  const select = document.getElementById('req-user');
+  const previous = select.value;
+  let users = [];
+  try { users = (await j('/api/admin/users')).users || []; } catch (err) { return; }
+  while (select.firstChild) select.removeChild(select.firstChild);
+  select.appendChild(el('option', { value: '', textContent: 'Все пользователи' }));
+  select.appendChild(el('option', { value: '__system__', textContent: 'Системные (не из web)' }));
+  users.forEach(u => select.appendChild(el('option', { value: u.username, textContent: u.username })));
+  select.value = previous;
+}
+
+document.getElementById('req-user').addEventListener('change', e => {
+  state.reqUser = e.target.value;
+  reqPage = 1;
+  loadRequests();
+});
 
 function editAnswer(item) {
   const box = document.getElementById('req-list');
@@ -1654,6 +1755,96 @@ document.getElementById('syn-check-btn').addEventListener('click', async () => {
   out.textContent = data.variants.map((v, i) => (i ? '→ ' : '') + v).join('\n');
   out.style.whiteSpace = 'pre-wrap';
 });
+
+function formatSize(bytes) {
+  if (!bytes) return '—';
+  if (bytes < 1024) return bytes + ' Б';
+  if (bytes < 1024 * 1024) return Math.round(bytes / 1024) + ' КБ';
+  return (bytes / 1048576).toFixed(1) + ' МБ';
+}
+
+async function loadDocs() {
+  const data = await j('/api/admin/docs');
+  const query = document.getElementById('doc-search').value.trim().toLowerCase();
+  const items = (data.items || []).filter(item => !query || item.name.toLowerCase().includes(query));
+  document.getElementById('doc-count').textContent =
+    'документов: ' + data.total + ', в индексе: ' + data.indexed + ', загружено: ' + data.uploaded
+    + (query ? ', найдено: ' + items.length : '');
+  const body = document.querySelector('#doc-table tbody');
+  while (body.firstChild) body.removeChild(body.firstChild);
+  items.forEach(item => {
+    const actions = [
+      el('button', {
+        textContent: 'Переиндексировать',
+        onclick: async () => {
+          const msg = document.getElementById('doc-msg');
+          msg.textContent = 'Индексирую ' + item.name + '…';
+          try {
+            const saved = await j('/api/admin/docs/' + encodeURIComponent(item.name) + '/index', { method: 'POST' });
+            msg.textContent = 'Готово: ' + saved.chunks + ' фрагментов';
+            loadDocs();
+          } catch (err) { msg.textContent = err.message; }
+        }
+      })
+    ];
+    if (item.editable) {
+      actions.push(el('button', {
+        className: 'danger',
+        textContent: 'Удалить',
+        onclick: async () => {
+          if (!confirm('Удалить документ ' + item.name + ' и его фрагменты из индекса?')) return;
+          const msg = document.getElementById('doc-msg');
+          try {
+            await j('/api/admin/docs/' + encodeURIComponent(item.name), { method: 'DELETE' });
+            msg.textContent = 'Удалено: ' + item.name;
+            loadDocs();
+          } catch (err) { msg.textContent = err.message; }
+        }
+      }));
+    }
+    body.appendChild(el('tr', {}, [
+      el('td', { textContent: item.name }),
+      el('td', { textContent: item.format }),
+      el('td', { textContent: formatSize(item.size) }),
+      el('td', { textContent: item.indexed ? String(item.chunks) : 'не в индексе' }),
+      el('td', { textContent: item.modified }),
+      el('td', { textContent: item.editable ? 'загружен' : 'документация' }),
+      el('td', {}, actions)
+    ]));
+  });
+}
+
+function docAction(url, options, button) {
+  const msg = document.getElementById('doc-msg');
+  button.disabled = true;
+  msg.textContent = 'Выполняю…';
+  return j(url, options)
+    .then(data => { msg.textContent = data.name ? 'Готово: ' + data.name : 'Готово'; loadDocs(); })
+    .catch(err => { msg.textContent = err.message; })
+    .finally(() => { button.disabled = false; });
+}
+
+document.getElementById('doc-upload').addEventListener('click', () => {
+  const input = document.getElementById('doc-file');
+  if (!input.files || !input.files.length) {
+    document.getElementById('doc-msg').textContent = 'Выберите файл';
+    return;
+  }
+  const form = new FormData();
+  form.append('file', input.files[0]);
+  docAction('/api/admin/docs/upload', { method: 'POST', body: form, headers: {} }, document.getElementById('doc-upload'))
+    .then(() => { input.value = ''; });
+});
+
+document.getElementById('doc-fetch').addEventListener('click', () => {
+  const input = document.getElementById('doc-url');
+  const url = input.value.trim();
+  if (!url) { document.getElementById('doc-msg').textContent = 'Введите ссылку'; return; }
+  docAction('/api/admin/docs/url', { method: 'POST', body: JSON.stringify({ url }) }, document.getElementById('doc-fetch'))
+    .then(() => { input.value = ''; });
+});
+
+document.getElementById('doc-search').addEventListener('input', loadDocs);
 
 async function loadIndex() {
   if (indexTimer) clearInterval(indexTimer);

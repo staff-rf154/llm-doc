@@ -124,6 +124,34 @@ def collect_chunks() -> list[dict]:
     return points
 
 
+def index_single(root: str, path: Path, rel: str) -> dict:
+    """Проиндексировать один файл в активную коллекцию (точечное обновление)."""
+    client = vs.get_qdrant()
+    collection = vs.target_name()
+    vs.ensure_collection(collection)
+    document = load_document(path)
+    text = document.get("text", "")
+    if not text.strip():
+        raise ValueError("Файл не содержит текста")
+    chunks, pages = split_with_pages(document)
+    if not chunks:
+        raise ValueError("Файл не содержит текста")
+    points = chunk_points(rel, chunks, pages, document.get("title", ""))
+    vs.delete_source_points(rel, collection)
+    for batch in iter_batches(points, settings.int_value("INGEST_BATCH_SIZE")):
+        upsert_batch(client, collection, batch)
+    stat = path.stat()
+    index_state.save_file_progress(
+        collection,
+        f"{root}|{rel}",
+        stat.st_size,
+        stat.st_mtime,
+        len(points),
+        len(points),
+    )
+    return {"source": rel, "chunks": len(points), "collection": collection}
+
+
 class ReindexJob:
     """Фоновая переиндексация со срезом прогресса, паузой и возобновлением."""
 

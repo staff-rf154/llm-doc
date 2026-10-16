@@ -11,12 +11,16 @@ LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "0"))
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-base")
 DOCS_DIR = os.getenv("DOCS_DIR", "/data/docs")
 EXTRACTED_DIR = os.getenv("EXTRACTED_DIR", "/data/extracted")
+UPLOADS_DIR = os.getenv("UPLOADS_DIR", "/data/uploads")
 EVAL_DIR = os.getenv("EVAL_DIR", "/data/eval")
 PROMPTS_DB = os.getenv("PROMPTS_DB", "/data/prompts/prompts.db")
 PROMPTS_SEED_ON_START = os.getenv("PROMPTS_SEED_ON_START", "1") not in ("0", "false", "False")
 PROMPTS_MAX = int(os.getenv("PROMPTS_MAX", "8"))
 
-SOURCE_ROOTS = [DOCS_DIR, EXTRACTED_DIR]
+SOURCE_ROOTS = [DOCS_DIR, EXTRACTED_DIR, UPLOADS_DIR]
+
+UPLOAD_MAX_MB = int(os.getenv("UPLOAD_MAX_MB", "100"))
+UPLOAD_URL_TIMEOUT = int(os.getenv("UPLOAD_URL_TIMEOUT", "60"))
 
 CHUNK_SIZE = int(os.getenv("CHUNK_SIZE", "1000"))
 CHUNK_OVERLAP = int(os.getenv("CHUNK_OVERLAP", "150"))
@@ -56,6 +60,10 @@ WEB_CRAWL_DELAY_MS = int(os.getenv("WEB_CRAWL_DELAY_MS", "500"))
 WEB_CRAWL_RESPECT_ROBOTS = os.getenv("WEB_CRAWL_RESPECT_ROBOTS", "1") not in ("0", "false", "False")
 WEB_CRAWL_USER_AGENT = os.getenv("WEB_CRAWL_USER_AGENT", "Mozilla/5.0 (compatible; DocsBot/1.0)")
 INGEST_CHECKPOINT_EVERY = int(os.getenv("INGEST_CHECKPOINT_EVERY", "64"))
+SSE_HEARTBEAT = int(os.getenv("SSE_HEARTBEAT", "10"))
+PLATFORM_AWARE = os.getenv("PLATFORM_AWARE", "1") not in ("0", "false", "False")
+PLATFORM_EXTRA_CHUNKS = int(os.getenv("PLATFORM_EXTRA_CHUNKS", "2"))
+PLATFORM_MAX_EXTRA = int(os.getenv("PLATFORM_MAX_EXTRA", "6"))
 INGEST_BATCH_SIZE = int(os.getenv("INGEST_BATCH_SIZE", "64"))
 INGEST_WORKERS = int(os.getenv("INGEST_WORKERS", "8"))
 
@@ -71,7 +79,17 @@ SYSTEM_PROMPT = (
     "Указывай источники в формате [doc:chunk]. "
     "Называй в тексте ответа полное название документа, из которого взята "
     "информация (например, «SIEM Help», а не «документ» или «файл»), и "
-    "рекомендуй детально ознакомиться с этим документом."
+    "рекомендуй детально ознакомиться с этим документом. "
+    "Документация частично разделена по операционным системам: одни материалы "
+    "описаны для Windows, другие — для Linux, у каждого фрагмента указана "
+    "строка «Платформа». Правила ответа: если в вопросе названа конкретная ОС — "
+    "отвечай только по ней, вторую платформу не упоминай; если ОС не указана, а "
+    "среди фрагментов есть и Windows, и Linux — веди ответ параллельно, отдельным "
+    "блоком «Для Windows» и отдельным блоком «Для Linux» со своими шагами, путями "
+    "и командами, и в конце перечисли, чем различаются варианты; если для одной из "
+    "платформ в фрагментах ничего нет — прямо скажи, что в документации есть "
+    "только вариант для другой ОС, и предложи уточнить ОС. Не выдумывай различий: "
+    "бери их только из фрагментов."
     "Если пользователь спрашивает, что ты умеешь, перечисли свои возможности: "
     "работа с текстом и информацией, ответы на вопросы простыми словами, "
     "написание, редактирование, сокращение и перевод текстов, анализ документов, "

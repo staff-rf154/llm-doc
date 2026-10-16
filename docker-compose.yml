@@ -23,6 +23,10 @@ services:
     image: ollama/ollama:latest
     container_name: llm-ollama
     profiles: ["local-llm"]
+    environment:
+      - OLLAMA_NUM_PARALLEL=${OLLAMA_NUM_PARALLEL:-2}
+      - OLLAMA_MAX_LOADED_MODELS=${OLLAMA_MAX_LOADED_MODELS:-1}
+      - OLLAMA_KEEP_ALIVE=${OLLAMA_KEEP_ALIVE:--1m}
     volumes:
       - ./ollama/models:/root/.ollama
     ports:
@@ -79,12 +83,19 @@ services:
       - INGEST_WORKERS=${INGEST_WORKERS:-8}
       - INGEST_BATCH_SIZE=${INGEST_BATCH_SIZE:-64}
       - INGEST_CHECKPOINT_EVERY=${INGEST_CHECKPOINT_EVERY:-64}
+      - PLATFORM_AWARE=${PLATFORM_AWARE:-1}
+      - SSE_HEARTBEAT=${SSE_HEARTBEAT:-10}
+      - UPLOAD_MAX_MB=${UPLOAD_MAX_MB:-100}
+      - UPLOAD_URL_TIMEOUT=${UPLOAD_URL_TIMEOUT:-60}
+      - PLATFORM_EXTRA_CHUNKS=${PLATFORM_EXTRA_CHUNKS:-2}
+      - PLATFORM_MAX_EXTRA=${PLATFORM_MAX_EXTRA:-6}
       - LLM_BASE_URL=${LLM_BASE_URL:-http://ollama:11434/v1}
       - LLM_API_KEY=${LLM_API_KEY:-ollama}
       - LLM_MODEL=${LLM_MODEL:-qwen2.5:7b-instruct}
     volumes:
       - ./data/docs:/data/docs:ro
       - ./data/extracted:/data/extracted
+      - ./data/uploads:/data/uploads
       - ./data/eval:/data/eval
       - ./data/prompts:/data/prompts
       - ./data/index_state:/data/index_state

@@ -1,6 +1,9 @@
 """API кабинета администратора: пользователи, оценки, исправления, статистика."""
 
-from fastapi import APIRouter, Depends, HTTPException
+import httpx
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
 import appdb
@@ -9,6 +12,7 @@ import capabilities as capabilities_mod
 import config
 import corrections
 import docpages
+import documents as docs_mod
 import images
 import ingest
 import lessons
@@ -334,19 +338,31 @@ def requests(
     offset: int = 0,
     vote: str | None = None,
     search: str | None = None,
+    username: str | None = None,
+    origin: str | None = None,
     sort: str = "date",
     order: str = "desc",
     user: dict = Depends(auth.require_admin),
 ) -> dict:
     items = appdb.list_requests(
-        limit=limit, offset=offset, vote=vote, search=search, sort=sort, order=order
+        limit=limit,
+        offset=offset,
+        vote=vote,
+        search=search,
+        username=username,
+        origin=origin,
+        sort=sort,
+        order=order,
     )
     by_question = appdb.correction_ids_by_question()
     for item in items:
         item["correction_id"] = by_question.get(item["question"].strip().lower())
+        item["is_system"] = item.get("origin") not in ("", "web")
     return {
         "items": items,
-        "total": appdb.count_requests(vote=vote),
+        "total": appdb.count_requests(
+            vote=vote, username=username, search=search, origin=origin
+        ),
     }
 
 
@@ -364,6 +380,85 @@ def stats(days: int = 30, user: dict = Depends(auth.require_admin)) -> dict:
 def documents(user: dict = Depends(auth.require_admin)) -> dict:
     """Документы, доступные для ссылки на страницу."""
     return {"items": docpages.list_documents()}
+
+
+@router.get("/docs")
+def docs_list(user: dict = Depends(auth.require_admin)) -> dict:
+    """Файлы документации и их состояние в индексе."""
+    items = docs_mod.list_documents()
+    return {
+        "items": items,
+        "total": len(items),
+        "uploaded": len([item for item in items if item["editable"]]),
+        "indexed": len([item for item in items if item["indexed"]]),
+        "max_mb": config.UPLOAD_MAX_MB,
+        "formats": list(docs_mod.FILE_EXTENSIONS),
+    }
+
+
+@router.post("/docs/upload", status_code=201)
+async def docs_upload(
+    file: UploadFile = File(...),
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    """Загрузить документ с компьютера администратора."""
+    try:
+        saved = docs_mod.save_bytes(file.filename or "", await file.read())
+        indexed = docs_mod.index_document(saved["name"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Не удалось загрузить: {exc}") from exc
+    return {**saved, **indexed}
+
+
+class DocUrl(BaseModel):
+    url: str = Field(min_length=8, max_length=1000)
+
+
+@router.post("/docs/url", status_code=201)
+def docs_url(payload: DocUrl, user: dict = Depends(auth.require_admin)) -> dict:
+    """Скачать документ по http-ссылке и сразу проиндексировать."""
+    try:
+        saved = docs_mod.fetch_url(payload.url)
+        indexed = docs_mod.index_document(saved["name"])
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except httpx.HTTPStatusError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Сервер вернул {exc.response.status_code}",
+        ) from exc
+    except httpx.HTTPError as exc:
+        raise HTTPException(status_code=400, detail=f"Не удалось скачать: {exc}") from exc
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Не удалось скачать: {exc}") from exc
+    return {**saved, **indexed}
+
+
+@router.post("/docs/{name:path}/index", status_code=202)
+def docs_index(name: str, user: dict = Depends(auth.require_admin)) -> dict:
+    """Переиндексировать один документ."""
+    try:
+        return docs_mod.index_document(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/docs/{name:path}")
+def docs_delete(name: str, user: dict = Depends(auth.require_admin)) -> dict:
+    """Удалить загруженный документ и убрать его из индекса."""
+    if Path(docs_mod.safe_name(name)).suffix.lower() not in docs_mod.FILE_EXTENSIONS:
+        raise HTTPException(status_code=400, detail="Можно удалять только загруженные файлы")
+    try:
+        result = docs_mod.delete_document(name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not result["removed_file"] and not result["purged_points"]:
+        raise HTTPException(status_code=404, detail="Документ не найден")
+    return result
 
 
 @router.post("/documents/pages")

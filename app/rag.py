@@ -72,7 +72,12 @@ def sources_block(chunks: list[RetrievedChunk]) -> str:
     for chunk in chunks:
         entry = documents.setdefault(
             chunk.source,
-            {"name": document_name(chunk), "pages": set(), "url": chunk.url},
+            {
+                "name": document_name(chunk),
+                "pages": set(),
+                "url": chunk.url,
+                "platform": platform_label(chunk),
+            },
         )
         if chunk.page:
             entry["pages"].add(int(chunk.page))
@@ -86,6 +91,9 @@ def sources_block(chunks: list[RetrievedChunk]) -> str:
         line = entry["name"]
         if source and source != entry["name"]:
             line += f" ({source})"
+        platform = entry["platform"]
+        if platform and platform != "общая документация":
+            line += f", {platform}"
         if pages:
             line += f", с. {pages}"
         if entry["url"]:
@@ -118,6 +126,48 @@ def reference_block(doc_name: str, doc_pages: str) -> str:
         + "\n\nРекомендую детально ознакомиться с этим документом — "
         "там описаны детали, шаги и настройки, которых нет в кратком ответе."
     )
+
+
+PLATFORM_NOTE = (
+    "ВАЖНО про операционные системы: в вопросе ОС не указана, а среди найденных "
+    "фрагментов есть документация и для {windows}, и для {linux}. Обязательно веди "
+    "ответ параллельно: отдельный блок с заголовком «Для Windows» со своими шагами, "
+    "путями и командами и отдельный блок «Для Linux» с тем же. В конце добавь "
+    "короткий блок «Различия», где перечисли, чем варианты отличаются, опираясь "
+    "только на фрагменты. Не смешивай шаги разных ОС в одном списке. Если в "
+    "фрагментах есть данные только для одной ОС — напиши это прямо."
+)
+
+ONE_PLATFORM_NOTE = (
+    "ВАЖНО про операционные системы: в вопросе ОС не указана, и среди фрагментов "
+    "есть документация только для {platform}. Ответь по ней и явно добавь, что "
+    "в документации есть только этот вариант и для другой ОС нужно уточнить у "
+    "администратора, какая используется."
+)
+
+
+def platform_instruction(question: str, chunks: list[RetrievedChunk]) -> str:
+    """Указание модели вести ответ параллельно по Windows и Linux."""
+    import platforms
+
+    if not platforms.enabled() or platforms.question_platforms(question):
+        return ""
+    found = {
+        platform
+        for chunk in chunks
+        if (platform := platforms.platform_of_source(chunk.source))
+    }
+    if platforms.LINUX in found and platforms.WINDOWS in found:
+        return PLATFORM_NOTE.format(windows=platforms.LABELS[platforms.WINDOWS], linux=platforms.LABELS[platforms.LINUX])
+    if len(found) == 1:
+        return ONE_PLATFORM_NOTE.format(platform=platforms.LABELS[next(iter(found))])
+    return ""
+
+
+def platform_label(chunk: RetrievedChunk) -> str:
+    import platforms
+
+    return platforms.platform_label(chunk)
 
 
 def query_variants(query: str) -> list[str]:
@@ -163,7 +213,28 @@ def retrieve(query: str, top_k: int | None = None) -> list[RetrievedChunk]:
                 merged[key] = chunk
 
     ordered = sorted(merged.values(), key=lambda c: c.score, reverse=True)
-    return ordered[:top_k]
+    ordered = ordered[:top_k]
+    ordered.extend(platform_chunks(query, ordered))
+    return ordered
+
+
+def platform_chunks(query: str, chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    """Фрагменты из документов второй ОС, если платформа не указана в вопросе."""
+    import platforms
+
+    if not platforms.enabled() or platforms.question_platforms(query):
+        return []
+    sources = [c.source for c in chunks if platforms.platform_of_source(c.source)]
+    if not sources:
+        return []
+    extra = platforms.extra_chunks(
+        query,
+        sources,
+        limit=settings.int_value("PLATFORM_EXTRA_CHUNKS") or 2,
+        max_total=settings.int_value("PLATFORM_MAX_EXTRA") or 6,
+    )
+    known = {(c.source, c.chunk) for c in chunks}
+    return [chunk for chunk in extra if (chunk.source, chunk.chunk) not in known]
 
 
 def build_prompt(
@@ -177,6 +248,7 @@ def build_prompt(
         blocks.append(
             f"<fragment id=\"{chunk.citation}\">\n"
             f"Документ: {name} ({chunk.source})\n"
+            f"Платформа: {platform_label(chunk)}\n"
             f"{chunk.text}\n</fragment>"
         )
     lessons = lesson_examples(question)
@@ -185,7 +257,8 @@ def build_prompt(
         import lessons as lessons_mod
 
         blocks_lessons = lessons_mod.as_prompt_block(lessons) + "\n\n"
-    head = ""
+    platform_note = platform_instruction(question, chunks)
+    head = platform_note
     if examples:
         samples = "\n\n".join(
             f"<example>\nВопрос: {item['question']}\nПравильный ответ: {item['answer']}\n</example>"

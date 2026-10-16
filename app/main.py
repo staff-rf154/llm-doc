@@ -235,6 +235,7 @@ def ask(
         answer.corrected,
         len(answer.chunks),
         int((time.time() - started) * 1000),
+        origin="api",
     )
     payload = answer.to_dict()
     payload["request_id"] = request_id

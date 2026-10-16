@@ -109,6 +109,15 @@ def forget_run(collection: str) -> None:
         conn.execute("DELETE FROM runs WHERE collection = ?", (collection,))
 
 
+def forget_source(collection: str, source_key: str) -> None:
+    """Забыть прогресс по конкретному файлу, чтобы он индексировался заново."""
+    with _LOCK, connect() as conn:
+        conn.execute(
+            "DELETE FROM file_progress WHERE collection = ? AND source_key = ?",
+            (collection, source_key),
+        )
+
+
 def get_file_progress(collection: str, source_key: str) -> dict | None:
     ensure_schema()
     with connect() as conn:

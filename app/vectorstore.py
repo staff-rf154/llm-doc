@@ -159,6 +159,39 @@ def swap_target(new_name: str) -> str:
     return previous
 
 
+def source_filter(source: str) -> models.Filter:
+    return models.Filter(
+        must=[models.FieldCondition(key="source", match=models.MatchValue(value=source))]
+    )
+
+
+def count_source_points(source: str, collection: str | None = None) -> int:
+    """Сколько точек источника лежит в коллекции."""
+    name = collection or target_name()
+    client = get_qdrant()
+    if not client.collection_exists(name):
+        return 0
+    result = client.count(collection_name=name, count_filter=source_filter(source), exact=True)
+    return int(result.count)
+
+
+def delete_source_points(source: str, collection: str | None = None) -> int:
+    """Удалить из коллекции все точки одного источника, вернуть их количество."""
+    name = collection or target_name()
+    client = get_qdrant()
+    if not client.collection_exists(name):
+        return 0
+    total = count_source_points(source, name)
+    if not total:
+        return 0
+    client.delete(
+        collection_name=name,
+        points_selector=models.FilterSelector(filter=source_filter(source)),
+        wait=True,
+    )
+    return total
+
+
 def collection_info(name: str | None = None) -> dict:
     client = get_qdrant()
     name = name or config.QDRANT_COLLECTION

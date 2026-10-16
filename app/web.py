@@ -1,4 +1,6 @@
 import json
+import queue
+import threading
 import time
 from pathlib import Path
 
@@ -52,7 +54,7 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
 
     if is_capabilities_question(question):
         text = render_capabilities()
-        request_id = appdb.log_request(user, question, text, True, False, 0, 0)
+        request_id = appdb.log_request(user, question, text, True, False, 0, 0, origin="web")
         payload = [
             {"type": "token", "data": text},
             {"type": "prompts", "data": suggestions()},
@@ -103,7 +105,7 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
 
     if not chunks:
         text = rag.empty_index_message()
-        request_id = appdb.log_request(user, question, text, False, False, 0, 0)
+        request_id = appdb.log_request(user, question, text, False, False, 0, 0, origin="web")
         payload = [
             {"type": "token", "data": text},
             {"type": "sources", "data": []},
@@ -120,23 +122,45 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
     client = rag.get_client()
 
     def generate():
+        events: queue.Queue = queue.Queue()
+        done = object()
         answer_parts: list[str] = []
-        try:
-            stream = client.chat.completions.create(
-                model=settings.value("LLM_MODEL", config.LLM_MODEL),
-                messages=_history(req.messages)[:-1] + [{"role": "user", "content": prompt}],
-                temperature=settings.float_value("LLM_TEMPERATURE"),
-                stream=True,
-            )
-            for event in stream:
-                if not event.choices:
-                    continue
-                delta = event.choices[0].delta
-                if delta.content:
-                    answer_parts.append(delta.content)
-                    yield _sse_event({"type": "token", "data": delta.content})
-        except Exception as exc:
-            yield _sse_event({"type": "error", "data": f"Ошибка генерации: {exc}"})
+        heartbeat = settings.int_value("SSE_HEARTBEAT") or 10
+
+        def pump() -> None:
+            try:
+                stream = client.chat.completions.create(
+                    model=settings.value("LLM_MODEL", config.LLM_MODEL),
+                    messages=_history(req.messages)[:-1] + [{"role": "user", "content": prompt}],
+                    temperature=settings.float_value("LLM_TEMPERATURE"),
+                    stream=True,
+                )
+                for event in stream:
+                    if not event.choices:
+                        continue
+                    delta = event.choices[0].delta
+                    if delta.content:
+                        answer_parts.append(delta.content)
+                        events.put({"type": "token", "data": delta.content})
+            except Exception as exc:
+                events.put({"type": "error", "data": f"Ошибка генерации: {exc}"})
+            finally:
+                events.put(done)
+
+        threading.Thread(target=pump, daemon=True).start()
+        failed = False
+        while True:
+            try:
+                item = events.get(timeout=heartbeat)
+            except queue.Empty:
+                yield ": ping\n\n"
+                continue
+            if item is done:
+                break
+            if item["type"] == "error":
+                failed = True
+            yield _sse_event(item)
+        if failed:
             return
 
         answer = "".join(answer_parts).strip()
@@ -153,6 +177,7 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
             False,
             len(chunks),
             int((time.time() - started) * 1000),
+            origin="web",
         )
         yield _sse_event(
             {

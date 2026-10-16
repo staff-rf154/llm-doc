@@ -21,7 +21,9 @@
 - [Сверка исправлений с документацией](#сверка-исправлений-с-документацией)
 - [Словарь синонимов](#словарь-синонимов)
 - [Обучение ассистента](#обучение-ассистента)
+- [Windows и Linux в ответах](#windows-и-linux-в-ответах)
 - [Изображения из документации](#изображения-из-документации)
+- [Документация из кабинета](#документация-из-кабинета)
 - [Индексация сайтов](#индексация-сайтов)
 - [Фоновая переиндексация без простоя](#фоновая-переиндексация-без-простоя)
 - [Срез прогресса, возобновление и пауза](#срез-прогресса-возобновление-и-пауза)
@@ -270,6 +272,24 @@ curl -s -b cookie.txt -X POST localhost:8091/api/logout
   «исправленный» вместе со ссылкой на страницу документа.
 - Вопросы с дизлайком доступны фильтром «Дизлайк» и сортировкой «по оценке».
 
+Во вкладке **«Оценки и правки»**:
+
+- каждый вопрос свёрнут в строку с датой, автором, временем ответа и числом
+  источников; клик по вопросу раскрывает ответ, оценку, комментарий и кнопку
+  «Исправить ответ»;
+- список листается по 10 запросов на страницу («Назад»/«Вперёд»), счётчик «Всего»
+  и переходы работают вместе с фильтрами;
+- фильтр по пользователю строится по списку пользователей, плюс отдельный пункт
+  «Системные (не из web)»;
+- у каждого запроса сохраняется источник `origin`: `web` для чата, `api` для
+  запросов к `/ask` и внешним API. Запросы не из web помечены в списке как
+  «системный» вместо имени пользователя.
+
+```bash
+curl -s -b cookie.txt 'localhost:8091/api/admin/requests?username=user&limit=10&offset=0' | jq
+curl -s -b cookie.txt 'localhost:8091/api/admin/requests?origin=api' | jq
+```
+
 ```bash
 curl -s -b cookie.txt localhost:8091/api/admin/stats | jq
 curl -s -b cookie.txt 'localhost:8091/api/admin/requests?vote=down&sort=vote' | jq
@@ -453,6 +473,41 @@ curl -s -b cookie.txt localhost:8091/api/admin/training/log | jq
 curl -s -b cookie.txt -X POST localhost:8091/api/admin/training/run
 ```
 
+## Windows и Linux в ответах
+
+Часть документации СёрчИнформ описана отдельно для разных ОС:
+`KIB_company_installation.pdf` и `KIB_company_installation_on_Linux.pdf`,
+`FileAuditor_installation.pdf` и `FileAuditor_installation_linux.pdf`,
+`dlp-capabilities-windows-company.pdf` и `dlp-capabilities-linux-company.pdf`,
+`ai-assistant-installation-windows/-linux-company.pdf`,
+`preparation_for_installation(-Linux).pdf`, `installation_SIEM.pdf` и
+`SIEM_installation_on_Linux.pdf`. Модуль `platforms.py` определяет платформу
+документа по имени файла и находит парный документ, сравнивая имена без маркера
+ОС (`platforms.counterpart`).
+
+Как это работает в ответе:
+
+- **ОС названа в вопросе** («установка на Linux») — докачиваются только фрагменты
+  этой платформы, вторая ОС не упоминается.
+- **ОС не названа** — к найденным фрагментам докачивается до `PLATFORM_EXTRA_CHUNKS`
+  фрагментов из парного документа (всего не больше `PLATFORM_MAX_EXTRA`), во
+  фрагменты добавляется строка «Платформа», и в промпт уходит явное указание:
+  вести ответ параллельно блоками «Для Windows» и «Для Linux» и перечислить
+  различия. Правило продублировано в `SYSTEM_PROMPT`.
+- В блоке «Документация, из которой взят ответ» платформенные документы
+  помечены: `FileAuditor Installation Linux (FileAuditor_installation_linux.pdf), Linux, с. 4`.
+- Если для одной из платформ в фрагментах ничего нет, ассистент прямо пишет, что
+  в документации есть только вариант для другой ОС, и предлагает уточнить ОС.
+
+Отключается целиком настройкой `PLATFORM_AWARE=0`.
+
+Пока модель думает, поток чата не молчит: раз в `SSE_HEARTBEAT` секунд в SSE
+отправляется служебная пустая строка `: ping`, чтобы соединение не рвётся на
+долгой паузе перед первым токеном. Если обслуживающий LLM Ollama, в `docker-compose.yml`
+заданы `OLLAMA_NUM_PARALLEL=2` (два одновременных запроса вместо очереди),
+`OLLAMA_MAX_LOADED_MODELS=1` и `OLLAMA_KEEP_ALIVE=-1m` (модель не выгружается
+из памяти между вопросами).
+
 ## Изображения из документации
 
 Встроенные иллюстрации из PDF (схемы, скриншоты интерфейсов, рисунки из
@@ -482,6 +537,39 @@ curl -s -b cookie.txt -X POST localhost:8091/api/admin/training/run
 ```bash
 curl -s -b cookie.txt localhost:8091/api/admin/images | jq
 curl -s -b cookie.txt -X POST localhost:8091/api/admin/images/start
+```
+
+## Документация из кабинета
+
+Вкладка **«Документация»** показывает все файлы из `data/docs`, `data/extracted` и
+`data/uploads` с форматом, размером, числом фрагментов в индексе и датой
+изменения. Отсюда можно:
+
+- **загрузить файл с ПК** — `POST /api/admin/docs/upload` (`multipart/form-data`,
+  поле `file`), поддерживаются `.pdf`, `.docx`, `.txt`, `.md` и файлы до
+  `UPLOAD_MAX_MB`;
+- **скачать документ по прямой http-ссылке** — `POST /api/admin/docs/url` с
+  `{"url": "https://docs.example.org/MongoDB_update.pdf"}`. HTML-страницы не
+  принимаются: нужна прямая ссылка на файл;
+- **переиндексировать один документ** — `POST /api/admin/docs/{имя}/index`;
+- **удалить загруженный документ** — `DELETE /api/admin/docs/{имя}`: файл
+  удаляется из `data/uploads`, а его точки — из активной коллекции Qdrant.
+  Файлы из `data/docs` и `data/extracted` удалить нельзя, только переиндексировать.
+
+Загруженные и скачанные файлы сразу попадают в индекс: `ingest.index_single`
+читает документ, режет на фрагменты и пишет их в активную коллекцию, предварительно
+удаляя старые точки этого источника, поэтому полная переиндексация не нужна.
+Имя файла проверяется на совпадения: если такое имя уже есть в другом корне
+документации, новый файл сохраняется как `имя_2.pdf` — иначе два файла делили бы
+одни и те же точки индекса.
+
+```bash
+curl -s -b cookie.txt localhost:8091/api/admin/docs | jq
+curl -s -b cookie.txt -F 'file=@manual.pdf' localhost:8091/api/admin/docs/upload | jq
+curl -s -b cookie.txt -X POST localhost:8091/api/admin/docs/url \
+  -H 'Content-Type: application/json' \
+  -d '{"url":"https://docs.example.org/MongoDB_update.pdf"}' | jq
+curl -s -b cookie.txt -X DELETE localhost:8091/api/admin/docs/MongoDB_update.pdf | jq
 ```
 
 ## Индексация сайтов
@@ -750,6 +838,9 @@ curl -s -b cookie.txt -X POST localhost:8091/retrieve \
 | POST | `/corrections/by-question` | обновить исправление с таким же вопросом или создать новое |
 | PATCH/DELETE | `/corrections/{id}` | изменить, отключить или удалить исправление |
 | GET  | `/documents`, POST `/documents/pages` | документы и текст указанных страниц |
+| GET  | `/docs` | файлы документации и состояние индекса |
+| POST | `/docs/upload`, POST `/docs/url` | загрузка файла с ПК, скачивание по http-ссылке |
+| POST/DELETE | `/docs/{имя}/index`, `/docs/{имя}` | переиндексация и удаление загруженного документа |
 | GET  | `/verify`, POST `/verify`, POST `/verify/reset` | сверка исправлений с документацией |
 | GET/PUT | `/sites`, POST `/sites/start` | сайты для индексации и запуск обхода |
 | GET | `/synonyms`, POST `/synonyms`, POST `/synonyms/import`, DELETE `/synonyms/{term}`, GET `/synonyms/expand` | словарь синонимов |
@@ -917,6 +1008,12 @@ make evaluate-ragas  # дополнительно faithfulness, answer_relevancy
 | `INGEST_CHECKPOINT_EVERY` | `64` | чанков между срезами прогресса |
 | `INGEST_BATCH_SIZE` | `64` | точек в одном upsert |
 | `INGEST_WORKERS` | `8` | потоков индексации (файлов одновременно) |
+| `SSE_HEARTBEAT` | `10` | пауза между служебными ping в потоке чата, сек |
+| `UPLOAD_MAX_MB` | `100` | максимальный размер загружаемого или скачиваемого файла, МБ |
+| `UPLOAD_URL_TIMEOUT` | `60` | таймаут скачивания файла по ссылке, сек |
+| `PLATFORM_AWARE` | `1` | разделять Windows и Linux в ответах |
+| `PLATFORM_EXTRA_CHUNKS` | `2` | фрагментов докачивать из документа второй ОС |
+| `PLATFORM_MAX_EXTRA` | `6` | всего докачанных фрагментов второй ОС |
 | `CHUNK_SIZE` | `1000` | размер чанка |
 | `CHUNK_OVERLAP` | `150` | перекрытие чанков |
 | `RETRIEVE_TOP_K` | `5` | число фрагментов в ответе |
@@ -969,6 +1066,9 @@ app/
   verify.py         сверка исправлений с документацией (вердикт LLM + прогресс)
   lessons.py        обучение: чат с наставником, уроки и их подбор в промпт
   images.py         извлечение, индексация и поиск изображений из PDF
+  platforms.py      разделение документации на Windows и Linux, парные документы
+  documents.py      список документации, загрузка файлов, скачивание по ссылке,
+                    удаление и точечная индексация
   capabilities.py   ответ «что ты умеешь» и перечень возможностей
   admin.py          API кабинета администратора
   rag.py            retrieval + генерация + цитаты + примеры исправлений

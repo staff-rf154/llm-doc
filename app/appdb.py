@@ -44,6 +44,7 @@ CREATE TABLE IF NOT EXISTS requests (
     doc_ref TEXT NOT NULL DEFAULT '',
     sources INTEGER NOT NULL DEFAULT 0,
     latency_ms INTEGER NOT NULL DEFAULT 0,
+    origin TEXT NOT NULL DEFAULT 'web',
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_requests_user ON requests(user_id);
@@ -102,7 +103,7 @@ CREATE INDEX IF NOT EXISTS idx_corrections_status ON corrections(status);
 
 CORRECTION_COLUMNS = ("doc_name", "doc_pages", "doc_ref")
 CHECK_COLUMNS = ("check_status", "check_comment", "checked_at", "check_collection")
-REQUEST_COLUMNS = ("doc_name", "doc_pages", "doc_ref")
+REQUEST_COLUMNS = ("doc_name", "doc_pages", "doc_ref", "origin")
 
 CHECK_STATUSES = ("unchecked", "verified", "review")
 
@@ -314,6 +315,7 @@ def log_request(
     sources: int,
     latency_ms: int,
     reference: dict | None = None,
+    origin: str = "web",
 ) -> int:
     ensure_schema()
     reference = reference or {}
@@ -322,8 +324,8 @@ def log_request(
             """
             INSERT INTO requests
                 (user_id, username, question, answer, grounded, corrected,
-                 doc_name, doc_pages, doc_ref, sources, latency_ms, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 doc_name, doc_pages, doc_ref, sources, latency_ms, origin, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 (user or {}).get("id"),
@@ -337,6 +339,7 @@ def log_request(
                 reference.get("doc_ref", ""),
                 sources,
                 latency_ms,
+                origin,
                 now(),
             ),
         )
@@ -357,6 +360,7 @@ def list_requests(
     username: str | None = None,
     vote: str | None = None,
     search: str | None = None,
+    origin: str | None = None,
     sort: str = "date",
     order: str = "desc",
 ) -> list[dict]:
@@ -364,7 +368,7 @@ def list_requests(
     query = """
         SELECT r.id, r.username, r.user_id, r.question, r.answer, r.grounded,
                r.corrected, r.doc_name, r.doc_pages, r.doc_ref,
-               r.sources, r.latency_ms, r.created_at,
+               r.sources, r.latency_ms, r.origin, r.created_at,
                t.vote, t.comment AS rating_comment, t.updated_at AS rated_at
         FROM requests r LEFT JOIN ratings t ON t.request_id = r.id
         WHERE 1 = 1
@@ -381,6 +385,11 @@ def list_requests(
     if search:
         query += " AND (r.question LIKE ? OR r.answer LIKE ?)"
         params.extend([f"%{search}%", f"%{search}%"])
+    if origin == "web":
+        query += " AND (r.origin = '' OR r.origin = 'web')"
+    elif origin:
+        query += " AND r.origin = ?"
+        params.append(origin)
     column = SORT_COLUMNS.get(sort, SORT_COLUMNS["date"])
     direction = "ASC" if str(order).lower() == "asc" else "DESC"
     query += f" ORDER BY {column} {direction}, r.id DESC LIMIT ? OFFSET ?"
@@ -536,18 +545,34 @@ def correction_ids_by_question() -> dict[str, int]:
     return {row["question"].strip().lower(): int(row["id"]) for row in rows if row["question"]}
 
 
-def count_requests(vote: str | None = None) -> int:
+def count_requests(
+    vote: str | None = None,
+    username: str | None = None,
+    search: str | None = None,
+    origin: str | None = None,
+) -> int:
     ensure_schema()
     query = """
         SELECT COUNT(*) AS n FROM requests r
         LEFT JOIN ratings t ON t.request_id = r.id WHERE 1 = 1
     """
     params: list = []
+    if username:
+        query += " AND r.username = ?"
+        params.append(username)
     if vote == "none":
         query += " AND t.vote IS NULL"
     elif vote in ("up", "down"):
         query += " AND t.vote = ?"
         params.append(vote)
+    if search:
+        query += " AND (r.question LIKE ? OR r.answer LIKE ?)"
+        params.extend([f"%{search}%", f"%{search}%"])
+    if origin == "web":
+        query += " AND (r.origin = '' OR r.origin = 'web')"
+    elif origin:
+        query += " AND r.origin = ?"
+        params.append(origin)
     with connect() as conn:
         row = conn.execute(query, params).fetchone()
     return int(row["n"])

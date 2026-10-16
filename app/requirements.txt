@@ -15,3 +15,6 @@ beautifulsoup4==4.12.3
 openai==1.59.6
 datasets==3.2.0
 ragas==0.2.4
+python-multipart==0.0.20
+httpx==0.28.1
+
