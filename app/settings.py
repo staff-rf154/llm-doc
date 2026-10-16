@@ -67,6 +67,9 @@ PARAMS: list[Param] = [
           hint="Сколько фрагментов документации попадает в промпт"),
     Param("CORRECTION_MATCH_THRESHOLD", "Порог подстановки исправления", "float", group=RETRIEVAL,
           hint="Схожесть вопроса с исправлением, выше — отдаём исправленный ответ как есть"),
+    Param("CORRECTION_OVERLAP_WORDS", "Общих слов для точного исправления", "int", group=RETRIEVAL,
+          hint="Сколько значимых слов должно совпадать в вопросе и в исправлении, "
+               "иначе оно идёт только как пример. 0 — проверка отключена"),
     Param("CORRECTION_EXAMPLES", "Примеров исправлений в промпте", "int", group=RETRIEVAL,
           hint="Похожие исправления добавляются в промпт как образцы ответа"),
     Param("SYNONYMS_MAX_VARIANTS", "Вариантов запроса по синонимам", "int", group=RETRIEVAL,

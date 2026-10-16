@@ -1,5 +1,7 @@
 """Исправления ответов админом: отдельная БД + векторный индекс для подбора."""
 
+import re
+
 from qdrant_client.http import models
 
 import appdb
@@ -125,13 +127,45 @@ def search(question: str, limit: int = 3) -> list[dict]:
     ]
 
 
+STOP_WORDS = {
+    "как", "что", "где", "когда", "какой", "какая", "какие", "это", "для", "или",
+    "и", "в", "на", "с", "по", "из", "не", "no", "the", "a", "of", "to", "имеет",
+    "можно", "нужно", "надо", "его", "её", "их", "который", "которая",
+}
+
+STRONG_OVERLAP = 0.95
+
+
+def keywords(text: str) -> set[str]:
+    """Значимые слова вопроса без служебных."""
+    return {
+        word
+        for word in re.findall(r"[\w-]+", (text or "").lower())
+        if len(word) > 2 and word not in STOP_WORDS and not word.isdigit()
+    }
+
+
+def is_same_topic(question: str, stored_question: str, score: float) -> bool:
+    """Отсечь ложные совпадения: вектор бывает близок при одном общем слове."""
+    if score >= STRONG_OVERLAP:
+        return True
+    shared = keywords(question) & keywords(stored_question)
+    needed = settings.int_value("CORRECTION_OVERLAP_WORDS")
+    if not needed:
+        needed = 2
+    return len(shared) >= needed
+
+
 def match(question: str) -> tuple[dict | None, list[dict]]:
-    """Точное исправление (порог схожести) и примеры для подсказки модели."""
+    """Исправление для прямого ответа и примеры для подсказки модели."""
     found = search(question, limit=max(1, settings.int_value("CORRECTION_EXAMPLES") + 1))
     exact = None
     examples: list[dict] = []
+    threshold = settings.float_value("CORRECTION_MATCH_THRESHOLD")
     for item in found:
-        if exact is None and item["score"] >= settings.float_value("CORRECTION_MATCH_THRESHOLD"):
+        if exact is None and item["score"] >= threshold and is_same_topic(
+            question, item["question"], item["score"]
+        ):
             exact = item
             continue
         if len(examples) < settings.int_value("CORRECTION_EXAMPLES"):
