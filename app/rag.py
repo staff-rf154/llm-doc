@@ -180,6 +180,87 @@ def query_variants(query: str) -> list[str]:
         return [query]
 
 
+def _to_chunk(point) -> RetrievedChunk:
+    payload = point.payload or {}
+    return RetrievedChunk(
+        text=payload.get("text", ""),
+        source=payload.get("source", "unknown"),
+        chunk=int(payload.get("chunk", 0)),
+        score=float(point.score),
+        url=payload.get("url", ""),
+        title=payload.get("title", ""),
+        page=int(payload.get("page", 0) or 0),
+        kind=payload.get("kind", "file") or "file",
+    )
+
+
+def _dense_points(client, target: str, variant: str, limit: int) -> list:
+    try:
+        return client.query_points(
+            collection_name=target,
+            query=vs.embed_query(variant),
+            using="dense",
+            limit=limit,
+            with_payload=True,
+        ).points
+    except Exception:
+        return client.query_points(
+            collection_name=target,
+            query=vs.embed_query(variant),
+            limit=limit,
+            with_payload=True,
+        ).points
+
+
+def _hybrid_points(client, target: str, variant: str, limit: int):
+    """Dense + BM25 с слиянием RRF; при отсутствии sparse-индекса — только dense."""
+    if not config.HYBRID_SPARSE or not vs.supports_sparse(target):
+        return _dense_points(client, target, variant, limit)
+    sparse = vs.sparse_query(variant)
+    if sparse is None:
+        return _dense_points(client, target, variant, limit)
+    from qdrant_client.http import models
+
+    prefetch = [
+        models.Prefetch(query=vs.embed_query(variant), using="dense", limit=limit),
+        models.Prefetch(query=sparse, using="sparse", limit=limit),
+    ]
+    try:
+        return client.query_points(
+            collection_name=target,
+            prefetch=prefetch,
+            query=models.FusionQuery(fusion=models.Fusion.RRF),
+            limit=limit,
+            with_payload=True,
+        ).points
+    except Exception:
+        return _dense_points(client, target, variant, limit)
+
+
+def rerank(query: str, chunks: list[RetrievedChunk], top_k: int) -> list[RetrievedChunk]:
+    """Переранжирование кандидатов cross-encoder'ом."""
+    if not config.RERANKER_ENABLED or not chunks:
+        return chunks[:top_k]
+    candidates = chunks[: settings.int_value("RERANKER_CANDIDATES") or len(chunks)]
+    try:
+        model = vs.get_reranker()
+        pairs = [(query, chunk.text) for chunk in candidates]
+        scores = model.predict(pairs, batch_size=config.RERANKER_BATCH, show_progress_bar=False)
+    except Exception:
+        return chunks[:top_k]
+    ranked = sorted(
+        zip(candidates, [float(score) for score in scores]),
+        key=lambda pair: pair[1],
+        reverse=True,
+    )
+    keep = settings.int_value("RERANKER_TOP_K") or top_k
+    result = []
+    for chunk, score in ranked[: max(top_k, keep)]:
+        chunk.score = round(score, 4)
+        result.append(chunk)
+    return result
+
+
 def retrieve(query: str, top_k: int | None = None) -> list[RetrievedChunk]:
     top_k = top_k or settings.int_value("RETRIEVE_TOP_K")
     client = vs.get_qdrant()
@@ -187,32 +268,18 @@ def retrieve(query: str, top_k: int | None = None) -> list[RetrievedChunk]:
     if not client.collection_exists(target):
         return []
 
+    pool = max(settings.int_value("HYBRID_CANDIDATES") or top_k, top_k)
     merged: dict[tuple[str, int], RetrievedChunk] = {}
     for variant in query_variants(query):
-        results = client.query_points(
-            collection_name=target,
-            query=vs.embed_query(variant),
-            limit=top_k,
-            with_payload=True,
-        ).points
-        for point in results:
-            payload = point.payload or {}
-            chunk = RetrievedChunk(
-                text=payload.get("text", ""),
-                source=payload.get("source", "unknown"),
-                chunk=int(payload.get("chunk", 0)),
-                score=float(point.score),
-                url=payload.get("url", ""),
-                title=payload.get("title", ""),
-                page=int(payload.get("page", 0) or 0),
-                kind=payload.get("kind", "file") or "file",
-            )
+        for point in _hybrid_points(client, target, variant, pool):
+            chunk = _to_chunk(point)
             key = (chunk.source, chunk.chunk)
             previous = merged.get(key)
             if previous is None or chunk.score > previous.score:
                 merged[key] = chunk
 
     ordered = sorted(merged.values(), key=lambda c: c.score, reverse=True)
+    ordered = rerank(query, ordered, top_k)
     ordered = ordered[:top_k]
     ordered.extend(platform_chunks(query, ordered))
     return ordered

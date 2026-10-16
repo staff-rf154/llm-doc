@@ -1,6 +1,7 @@
 from fastapi import FastAPI, HTTPException, Request, Response
 from pydantic import BaseModel, Field
 
+import threading
 import time
 from pathlib import Path
 
@@ -51,6 +52,26 @@ def startup() -> None:
         print(f"уроков в индексе обучения: {lessons.reindex()}")
     except Exception as exc:
         print(f"индекс уроков недоступен: {exc}")
+    threading.Thread(target=warm_search, daemon=True).start()
+
+
+def warm_search() -> None:
+    """Прогреть модели поиска в фоне, чтобы первый запрос не ждал загрузки."""
+    import vectorstore as vs
+
+    if config.HYBRID_SPARSE:
+        try:
+            vs.get_sparse_model()
+            print("BM25-модель загружена")
+        except Exception as exc:
+            print(f"BM25-модель недоступна: {exc}")
+    if config.RERANKER_ENABLED:
+        try:
+            started = time.time()
+            vs.get_reranker()
+            print(f"reranker загружен за {int(time.time() - started)} с")
+        except Exception as exc:
+            print(f"reranker недоступен: {exc}")
 
 
 class LoginRequest(BaseModel):

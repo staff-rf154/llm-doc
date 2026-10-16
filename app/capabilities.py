@@ -35,7 +35,7 @@ GROUPS: list[tuple[str, list[str]]] = [
         ],
     ),
     (
-        "База знаний company",
+        "База знаний",
         [
             "Ищу ответы по проиндексированной документации продуктов",
             "Показываю источники и ссылки на оригиналы документов",
@@ -104,7 +104,7 @@ def suggestions(limit: int | None = None) -> list[str]:
 
 
 def render(limit: int | None = None) -> str:
-    lines = ["Я — ассистент по базе знаний company.", "", "Что я умею:"]
+    lines = [f"Я — ассистент по базе знаний {config.APP_TITLE}.", "", "Что я умею:"]
     for group in groups():
         lines.append("")
         lines.append(f"{group['title']}:")

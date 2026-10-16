@@ -27,7 +27,7 @@ def split_text(text: str) -> list[str]:
     return [c.strip() for c in splitter.split_text(text) if c.strip()]
 
 
-DOCS_BASE_URL = "https://docs.example.org/"
+DOCS_BASE_URL = config.DOCS_BASE_URL
 
 
 def chunk_points(
@@ -64,7 +64,9 @@ def split_with_pages(document: dict) -> tuple[list[str], list[int]]:
 
 
 def origin_url(rel: str) -> str:
-    """Ссылка на оригинал документа на docs.example.org, если он оттуда."""
+    """Ссылка на оригинал документа, если в .env задан DOCS_BASE_URL."""
+    if not DOCS_BASE_URL:
+        return ""
     name = Path(rel).name
     return f"{DOCS_BASE_URL}{quote(name)}"
 
@@ -89,9 +91,12 @@ def iter_batches(points: list[dict], batch_size: int):
 
 def upsert_batch(client, collection: str, batch: list[dict]) -> None:
     vectors = vs.embed_passages([p["text"] for p in batch])
-    client.upsert(
-        collection_name=collection,
-        points=[
+    sparse = vs.embed_sparse([p["text"] for p in batch])
+    points = []
+    for position, (p, vector) in enumerate(zip(batch, vectors)):
+        if sparse:
+            vector = {"dense": vector, "sparse": sparse[position]}
+        points.append(
             models.PointStruct(
                 id=p["id"],
                 vector=vector,
@@ -105,10 +110,8 @@ def upsert_batch(client, collection: str, batch: list[dict]) -> None:
                     "url": p.get("url", "") or origin_url(p["source"]),
                 },
             )
-            for p, vector in zip(batch, vectors)
-        ],
-        wait=True,
-    )
+        )
+    client.upsert(collection_name=collection, points=points, wait=True)
 
 
 def collect_chunks() -> list[dict]:

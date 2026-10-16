@@ -17,4 +17,6 @@ datasets==3.2.0
 ragas==0.2.4
 python-multipart==0.0.20
 httpx==0.28.1
+fastembed==0.7.3
+
 

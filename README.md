@@ -1,4 +1,4 @@
-# RAG-ассистент по внутренней документации company
+# RAG-ассистент по внутренней документации
 
 Локальный RAG-пайплайн на CPU: индексация документации (PDF/DOCX/TXT/MD/HTML/CHM)
 и веб-сайтов в Qdrant эмбеддингами `multilingual-e5-base`, поиск по векторам,
@@ -33,6 +33,7 @@
 - [Веб-интерфейс](#вебинтерфейс)
 - [REST API](#rest-api)
 - [Локальная генерация на CPU](#локальная-генерация-на-cpu)
+- [Гибридный поиск и reranker](#гибридный-поиск-и-reranker)
 - [Оценка качества](#оценка-качества)
 - [Переменные окружения](#переменные-окружения)
 - [Makefile](#makefile)
@@ -99,7 +100,7 @@ data/docs/*.pdf, *.chm ──► chm_extract.py ──► data/extracted/*.txt
     временем, источниками, ссылкой и оценкой.
 10. **Метаданные источника.** В payload каждой точки лежат `page`, `title`,
     `kind` (`file` / `web`) и `url` — для документации это ссылка на оригинал
-    вида `https://docs.example.org/<файл>.pdf`, для сайтов — адрес страницы.
+    вида `<DOCS_BASE_URL><файл>.pdf`, для сайтов — адрес страницы.
     Благодаря этому карточка источника в чате показывает название, страницу и
     кликабельный оригинал (см. «Подробнее об источниках»).
 
@@ -119,7 +120,7 @@ cp .env.example .env
 # задать администратора (создаётся при первом старте)
 # ADMIN_USERNAME=admin
 # ADMIN_PASSWORD=сильный-пароль
-# APP_TITLE=База знаний company
+# APP_TITLE=База знаний
 
 # 1. документация в data/docs (PDF/DOCX/TXT/MD/HTML/CHM)
 # 2. поднять qdrant + ollama + api
@@ -255,7 +256,7 @@ curl -s -b cookie.txt -X POST localhost:8091/api/logout
 - работа с текстом и информацией: ответы на вопросы, объяснение сложных тем,
   написание, редактирование, сокращение и перевод текстов, анализ документов,
   статей и договоров, помощь с письмами, резюме, отчётами и презентациями;
-- база знаний company: поиск по проиндексированной документации с
+- база знаний компании: поиск по проиндексированной документации с
   показанием источников и ссылок;
 - ограничения: ассистент не выходит в интернет, не выполняет действия в
   системах и не выдумывает факты.
@@ -395,7 +396,7 @@ curl -s -b cookie.txt -X POST localhost:8091/api/admin/verify/reset
 `SYNONYMS_CACHE_TTL` секунд, сбрасывается при изменении через API.
 
 При первом старте каталог наполняется стартовым набором по терминологии
-company (`app/synonyms.py`), дальше его правит администратор на вкладке
+продуктов (`app/synonyms.py`), дальше его правит администратор на вкладке
 «Синонимы»: правка по месту, добавление термина, массовый импорт по строкам
 `слово — синоним1, синоним2` и проверка, какие варианты запроса получатся для
 произвольного вопроса.
@@ -549,7 +550,7 @@ curl -s -b cookie.txt -X POST localhost:8091/api/admin/images/start
   поле `file`), поддерживаются `.pdf`, `.docx`, `.txt`, `.md` и файлы до
   `UPLOAD_MAX_MB`;
 - **скачать документ по прямой http-ссылке** — `POST /api/admin/docs/url` с
-  `{"url": "https://docs.example.org/MongoDB_update.pdf"}`. HTML-страницы не
+  `{"url": "<DOCS_BASE_URL>MongoDB_update.pdf"}`. HTML-страницы не
   принимаются: нужна прямая ссылка на файл;
 - **переиндексировать один документ** — `POST /api/admin/docs/{имя}/index`;
 - **удалить загруженный документ** — `DELETE /api/admin/docs/{имя}`: файл
@@ -568,7 +569,7 @@ curl -s -b cookie.txt localhost:8091/api/admin/docs | jq
 curl -s -b cookie.txt -F 'file=@manual.pdf' localhost:8091/api/admin/docs/upload | jq
 curl -s -b cookie.txt -X POST localhost:8091/api/admin/docs/url \
   -H 'Content-Type: application/json' \
-  -d '{"url":"https://docs.example.org/MongoDB_update.pdf"}' | jq
+  -d '{"url":"<DOCS_BASE_URL>MongoDB_update.pdf"}' | jq
 curl -s -b cookie.txt -X DELETE localhost:8091/api/admin/docs/MongoDB_update.pdf | jq
 ```
 
@@ -608,7 +609,7 @@ curl -s -b cookie.txt -X DELETE localhost:8091/api/admin/docs/MongoDB_update.pdf
 curl -s -b cookie.txt localhost:8091/api/admin/sites | jq
 curl -s -b cookie.txt -X PUT localhost:8091/api/admin/sites \
   -H 'Content-Type: application/json' \
-  -d '{"sites":[{"url":"https://example.org","enabled":true,"max_pages":300}]}'
+  -d '{"sites":[{"url":"https://example.org","enabled":true,"max_pages":300}]'
 curl -s -b cookie.txt -X POST localhost:8091/api/admin/sites/start
 ```
 
@@ -720,15 +721,15 @@ make reindex          # если индексация на паузе, тоже 
 |------|------------|
 | `id` | порядок выдачи |
 | `text` | текст промта (уникальный) |
-| `product` | продукт company (КИБ, Файловый аудитор, SIEM, ProfileCenter…) |
+| `product` | продукт (КИБ, Файловый аудитор, SIEM, ProfileCenter…) |
 | `keywords` | ключевые слова для сопоставления с документами индекса |
-| `source_url` | ссылка на источник (документ на docs.example.org или раздел сайта) |
+| `source_url` | ссылка на источник (документ по `DOCS_BASE_URL` или раздел сайта) |
 | `active` | показывается ли промт в чате |
 | `created_at` | дата добавления |
 
-Каталог наполнен по результатам анализа сайта <https://example.org/>
+Каталог наполнен по результатам анализа сайта, адрес которого задаётся в `.env` (`SITE_URL`)
 (разделы «Продукты», «Решения», «Бизнес-задачи», «Контроль сотрудников») и
-привязан к документации `docs.example.org`, которая лежит в индексе.
+привязан к документации по адресу `DOCS_BASE_URL`, которая лежит в индексе.
 
 Выдача динамическая: `GET /prompts` сначала выбирает промты, чьи `keywords`
 встречаются среди реально проиндексированных документов, затем добавляет
@@ -753,7 +754,7 @@ make prompts        # посмотреть текущую выдачу
 | Название документа | `title` из метаданных PDF; если их нет — имя файла без расширения |
 | Тип источника | «документация» или «страница сайта» (`kind`) |
 | Страница | `page` из индекса; для страниц сайтов и текстовых файлов — «страница не определена» |
-| Ссылка на оригинал | `url`: для PDF — `https://docs.example.org/<файл>.pdf`, для сайта — адрес страницы |
+| Ссылка на оригинал | `url`: для PDF — `<DOCS_BASE_URL><файл>.pdf`, для сайта — адрес страницы |
 | Релевантность | словами (высокая / средняя / низкая) и числом `score` |
 | Текст фрагмента | первые ~130 px, кнопка «Показать полностью» разворачивает целиком |
 
@@ -773,7 +774,7 @@ curl -s -b cookie.txt -X POST localhost:8091/retrieve \
   "title": "SIEM",
   "page": 5,
   "kind": "file",
-  "url": "https://docs.example.org/SIEM_help.pdf"
+  "url": "<DOCS_BASE_URL>SIEM_help.pdf"
 }
 ```
 
@@ -939,6 +940,49 @@ LLM_API_KEY=sk-...
 LLM_MODEL=gpt-4o-mini
 ```
 
+## Гибридный поиск и reranker
+
+Поиск сделан двухканальным и переранжировывается моделью:
+
+- **Dense-канал** — как раньше: `multilingual-e5-base` с обязательными префиксами
+  `query: ` для запроса и `passage: ` для фрагмента (`E5_QUERY_PREFIX`,
+  `E5_PASSAGE_PREFIX` в `app/vectorstore.py`).
+- **Sparse-канал (BM25)** — модель `Qdrant/bm25` из `fastembed`
+  (`SPARSE_MODEL`). При индексации в каждую точку пишется пара векторов
+  `{"dense": [...], "sparse": {...}}`, поэтому коллекция создаётся с именованным
+  dense-вектором и sparse-индексом (`vectorstore.ensure_collection`).
+- **Слияние RRF** — `rag._hybrid_points` делает `prefetch` из двух запросов
+  (dense и sparse) и объединяет их через `FusionQuery(fusion=RRF)`. Веса
+  подбирать не нужно, метод устойчив к разным шкалам расстояний.
+- **Reranker** — `BAAI/bge-reranker-v2-m3` (cross-encoder) пересчитывает порядок
+  кандидатов перед формированием ответа: `RERANKER_CANDIDATES` кандидатов →
+  `RERANKER_TOP_K` в промпт (`rag.rerank`).
+- Старые коллекции без sparse-индекса не ломают поиск: `vectorstore.supports_sparse`
+  проверяет индекс, и тогда запрос уходит только в dense-канал. Полная
+  переиндексация (`make reindex` или кнопка «Индексация») после первого
+  внедрения занимает около часа и не мешает ответам: новая коллекция собирается
+  отдельно, алиас `docs` переключается в конце.
+- Модели прогреваются в фоне при старте (`main.warm_search`), поэтому первый
+  вопрос не ждёт загрузки reranker.
+
+Задержка поиска на CPU: гибридный запрос ~5 с, rerank 10 кандидатов ~4 с.
+
+| Параметр | По умолчанию | Смысл |
+|----------|---------------|-------|
+| `HYBRID_SPARSE` | `1` | включать BM25-канал (после переиндексации) |
+| `HYBRID_CANDIDATES` | `12` | сколько кандидатов берёт каждый канал |
+| `RERANKER_ENABLED` | `1` | переранжирование cross-encoder'ом |
+| `RERANKER_MODEL` | `BAAI/bge-reranker-v2-m3` | модель reranker'а |
+| `RERANKER_CANDIDATES` | `10` | сколько кандидатов оценивает reranker |
+| `RERANKER_TOP_K` | `5` | сколько оставляет в промпт |
+| `RERANKER_MAX_LENGTH` | `512` | максимум токенов на пару «запрос-фрагмент» |
+| `SPARSE_MODEL` | `Qdrant/bm25` | sparse-модель fastembed |
+
+Замер на `data/eval/dataset.json` (10 вопросов, `make evaluate`):
+`context_recall` 0,4636 → 0,4659, `answer_keyword_hit_rate` 0,5569 → 0,5748.
+На целевой проверке «должен найтись конкретный документ» hybrid+reranker находит
+5 из 6 документов против 4 из 6 на одном только dense-поиске.
+
 ## Оценка качества
 
 Эталонные вопросы — в `data/eval/dataset.json`:
@@ -959,7 +1003,9 @@ make evaluate-ragas  # дополнительно faithfulness, answer_relevancy
 | Переменная | По умолчанию | Назначение |
 |------------|--------------|------------|
 | `APP_PORT` | `8091` | порт веб-интерфейса и API |
-| `APP_TITLE` | `База знаний company` | название базы знаний (переопределяется в кабинете) |
+| `APP_TITLE` | `База знаний` | название базы знаний (переопределяется в кабинете) |
+| `DOCS_BASE_URL` | — | адрес сайта с оригиналами документации: от него строятся ссылки в ответах |
+| `SITE_URL` | — | адрес сайта, используемый в стартовых промтах |
 | `QDRANT_URL` | `http://qdrant:6333` | адрес Qdrant |
 | `QDRANT_API_KEY` | — | ключ Qdrant |
 | `QDRANT_COLLECTION` | `docs` | имя алиаса активного индекса |
@@ -1049,13 +1095,13 @@ app/
   settings.py       реестр настраиваемых параметров и доступ к ним во время работы
   loaders.py        чтение PDF/DOCX/TXT/MD/HTML, постранично и с заголовком
   chm_extract.py    распаковка CHM в текст
-  vectorstore.py    Qdrant, алиасы, эмбеддинги
+  vectorstore.py    Qdrant, алиасы, эмбеддинги dense и BM25, reranker
   ingest.py         чанкинг, индексация, фоновая задача ReindexJob
   webcrawl.py       обход сайтов и индексация их страниц
   prompts.py        каталог стартовых промтов и их динамическая выдача
   promptdb.py       SQLite-БД стартовых промтов
   synonymdb.py      SQLite-БД словаря синонимов и расширение запроса
-  synonyms.py       стартовый каталог синонимов по терминологии company
+  synonyms.py       стартовый каталог синонимов по терминологии продуктов
   index_state.py    SQLite-БД срезов прогресса индексации
   appdb.py          SQLite-БД пользователей, сессий, журнала, оценок, исправлений
                     и настроек

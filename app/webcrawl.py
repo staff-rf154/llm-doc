@@ -56,7 +56,7 @@ class Crawler:
                 headers={
                     "User-Agent": settings.value(
                         "WEB_CRAWL_USER_AGENT",
-                        "Mozilla/5.0 (compatible; DocsBot/1.0)",
+                        config.WEB_CRAWL_USER_AGENT,
                     ),
                     "Accept-Language": "ru-RU,ru;q=0.9",
                 },

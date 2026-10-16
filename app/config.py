@@ -9,6 +9,7 @@ LLM_MODEL = os.getenv("LLM_MODEL", "qwen2.5:7b-instruct")
 LLM_TEMPERATURE = float(os.getenv("LLM_TEMPERATURE", "0.1"))
 LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "0"))
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-base")
+SPARSE_MODEL = os.getenv("SPARSE_MODEL", "Qdrant/bm25")
 DOCS_DIR = os.getenv("DOCS_DIR", "/data/docs")
 EXTRACTED_DIR = os.getenv("EXTRACTED_DIR", "/data/extracted")
 UPLOADS_DIR = os.getenv("UPLOADS_DIR", "/data/uploads")
@@ -30,7 +31,8 @@ EMBED_DIM = 768
 PROMPTS_CACHE_TTL = int(os.getenv("PROMPTS_CACHE_TTL", "300"))
 INDEX_STATE_DB = os.getenv("INDEX_STATE_DB", "/data/index_state/index.db")
 APP_DB = os.getenv("APP_DB", "/data/app/app.db")
-APP_TITLE = os.getenv("APP_TITLE", "База знаний company")
+APP_TITLE = os.getenv("APP_TITLE", "База знаний")
+DOCS_BASE_URL = os.getenv("DOCS_BASE_URL", "")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
 SESSION_COOKIE = os.getenv("SESSION_COOKIE", "sid")
@@ -58,9 +60,20 @@ WEB_CRAWL_MAX_PAGES = int(os.getenv("WEB_CRAWL_MAX_PAGES", "2000"))
 WEB_CRAWL_TIMEOUT = int(os.getenv("WEB_CRAWL_TIMEOUT", "20"))
 WEB_CRAWL_DELAY_MS = int(os.getenv("WEB_CRAWL_DELAY_MS", "500"))
 WEB_CRAWL_RESPECT_ROBOTS = os.getenv("WEB_CRAWL_RESPECT_ROBOTS", "1") not in ("0", "false", "False")
-WEB_CRAWL_USER_AGENT = os.getenv("WEB_CRAWL_USER_AGENT", "Mozilla/5.0 (compatible; DocsBot/1.0)")
+WEB_CRAWL_USER_AGENT = os.getenv(
+    "WEB_CRAWL_USER_AGENT", "Mozilla/5.0 (compatible; DocsBot/1.0)"
+)
 INGEST_CHECKPOINT_EVERY = int(os.getenv("INGEST_CHECKPOINT_EVERY", "64"))
 SSE_HEARTBEAT = int(os.getenv("SSE_HEARTBEAT", "10"))
+HYBRID_SPARSE = os.getenv("HYBRID_SPARSE", "1") not in ("0", "false", "False")
+HYBRID_CANDIDATES = int(os.getenv("HYBRID_CANDIDATES", "20"))
+HYBRID_FUSION = os.getenv("HYBRID_FUSION", "rrf")
+RERANKER_ENABLED = os.getenv("RERANKER_ENABLED", "1") not in ("0", "false", "False")
+RERANKER_MODEL = os.getenv("RERANKER_MODEL", "BAAI/bge-reranker-v2-m3")
+RERANKER_CANDIDATES = int(os.getenv("RERANKER_CANDIDATES", "20"))
+RERANKER_TOP_K = int(os.getenv("RERANKER_TOP_K", "5"))
+RERANKER_BATCH = int(os.getenv("RERANKER_BATCH", "8"))
+RERANKER_MAX_LENGTH = int(os.getenv("RERANKER_MAX_LENGTH", "512"))
 PLATFORM_AWARE = os.getenv("PLATFORM_AWARE", "1") not in ("0", "false", "False")
 PLATFORM_EXTRA_CHUNKS = int(os.getenv("PLATFORM_EXTRA_CHUNKS", "2"))
 PLATFORM_MAX_EXTRA = int(os.getenv("PLATFORM_MAX_EXTRA", "6"))
@@ -75,6 +88,10 @@ SYSTEM_PROMPT = (
     "Отвечай строго на основе переданных фрагментов документации. "
     "Если в фрагментах нет ответа, прямо скажи: "
     "'В документации нет информации по этому вопросу'. "
+    "Никогда не достраивай ответ по памяти и не додумывай шаги, команды, "
+    "названия параметров и номера страниц: опирайся только на текст фрагментов. "
+    "Если фрагментов недостаточно для полного ответа, скажи, чего в них не хватает, "
+    "и предложи уточнить вопрос или уточнить версию продукта. "
     "Не выдумывай факты. Отвечай на языке вопроса. "
     "Указывай источники в формате [doc:chunk]. "
     "Называй в тексте ответа полное название документа, из которого взята "

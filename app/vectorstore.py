@@ -26,6 +26,55 @@ def get_embedder() -> SentenceTransformer:
     return model
 
 
+@lru_cache(maxsize=1)
+def get_sparse_model():
+    """BM25-модель fastembed для точного поиска по терминам (sparse-вектора)."""
+    from fastembed.sparse import SparseTextEmbedding
+
+    return SparseTextEmbedding(model_name=config.SPARSE_MODEL)
+
+
+@lru_cache(maxsize=1)
+def get_reranker():
+    from sentence_transformers import CrossEncoder
+
+    return CrossEncoder(
+        config.RERANKER_MODEL,
+        device="cpu",
+        max_length=int(config.RERANKER_MAX_LENGTH),
+    )
+
+
+def embed_sparse(texts: list[str]) -> list[dict]:
+    """BM25-вектора fastembed: {индексы: [...], значения: [...]} для Qdrant."""
+    if not texts:
+        return []
+    if not config.HYBRID_SPARSE:
+        return []
+    vectors = []
+    for item in get_sparse_model().embed(texts):
+        vectors.append({"indices": item.indices.tolist(), "values": item.values.tolist()})
+    return vectors
+
+
+def sparse_query(text: str):
+    """BM25-вектор запроса для поиска по sparse-индексу."""
+    if not config.HYBRID_SPARSE:
+        return None
+    item = next(iter(get_sparse_model().query_embed([text])))
+    return models.SparseVector(indices=item.indices.tolist(), values=item.values.tolist())
+
+
+def supports_sparse(name: str) -> bool:
+    """Есть ли в коллекции sparse-индекс (новые коллекции после переиндексации)."""
+    client = get_qdrant()
+    try:
+        info = client.get_collection(name)
+    except Exception:
+        return False
+    return "sparse" in (info.config.params.sparse_vectors or {})
+
+
 def embed_passages(texts: list[str]) -> list[list[float]]:
     prefixed = [config.E5_PASSAGE_PREFIX + t for t in texts]
     with EMBED_LOCK:
@@ -135,12 +184,22 @@ def ensure_collection(name: str, recreate: bool = False) -> None:
         exists = False
     if exists:
         return
+    sparse_config = None
+    if config.HYBRID_SPARSE:
+        sparse_config = {
+            "sparse": models.SparseVectorParams(
+                index=models.SparseIndexParams(on_disk=False)
+            )
+        }
     client.create_collection(
         collection_name=name,
-        vectors_config=models.VectorParams(
-            size=config.EMBED_DIM,
-            distance=models.Distance.COSINE,
-        ),
+        vectors_config={
+            "dense": models.VectorParams(
+                size=config.EMBED_DIM,
+                distance=models.Distance.COSINE,
+            )
+        },
+        sparse_vectors_config=sparse_config,
     )
 
 

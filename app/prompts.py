@@ -1,8 +1,11 @@
-"""Стартовые промты: каталог составлен по анализу сайта example.org
-(разделы «Продукты», «Решения», «Бизнес-задачи», «Контроль сотрудников»)
-и привязан к документации docs.example.org, лежащей в индексе.
+"""Стартовые промты по темам продуктов (разделы «Продукты», «Решения»,
+«Бизнес-задачи», «Контроль сотрудников») и документации, лежащей в индексе.
+
+Адреса сайта и документации задаются переменными окружения SITE_URL и
+DOCS_BASE_URL, поэтому в коде нет привязки к конкретным доменам.
 """
 
+import os
 import time
 from pathlib import Path
 
@@ -11,50 +14,54 @@ import promptdb
 import settings
 import vectorstore as vs
 
-SITE = "https://example.org/"
+SITE = os.getenv("SITE_URL", "") or ""
+
+
+def doc_url(filename: str) -> str:
+    return f"{config.DOCS_BASE_URL}{filename}" if config.DOCS_BASE_URL else ""
 
 SEED = [
-    ("Как настроить ICAP-сервис в Search Server?", "СёрчИнформ КИБ", ["icap_settings", "search_server"], "https://docs.example.org/ICAP_settings.pdf"),
-    ("Какие задачи решает перехват информации в DLP?", "СёрчИнформ КИБ", ["dlp-capabilities", "user_manual"], "https://docs.example.org/dlp-capabilities-windows-company.pdf"),
-    ("Как подготовить систему к установке агента KIB?", "СёрчИнформ КИБ", ["preparation_for_installation", "preparation_for_installation-linux"], "https://docs.example.org/preparation_for_installation.pdf"),
-    ("Как развернуть СёрчИнформ КИБ на Linux?", "СёрчИнформ КИБ", ["kib_company_installation_on_linux", "siem_installation_on_linux"], "https://docs.example.org/KIB_company_installation_on_Linux.pdf"),
-    ("Как установить клиентские части агента KIB?", "СёрчИнформ КИБ", ["client_parts_installation"], "https://docs.example.org/Client_parts_installation.pdf"),
-    ("Как настроить перехват электронной почты?", "СёрчИнформ КИБ", ["kib_company_mail_int_installation"], "https://docs.example.org/KIB_company_Mail_Int_installation.pdf"),
-    ("Как настроить интеграцию с внешним API?", "СёрчИнформ КИБ", ["installation_external_api"], "https://docs.example.org/installation_external_api.pdf"),
-    ("Как обновить СёрчИнформ KIB до новой версии?", "СёрчИнформ КИБ", ["kib_company_update_basic", "kib_company_update_on_linux_basic"], "https://docs.example.org/KIB_company_update_basic.pdf"),
-    ("Как выполнить миграцию на СёрчИнформ KIB?", "СёрчИнформ KIB", ["kib_migration", "siem_migration"], "https://docs.example.org/KIB_migration.pdf"),
-    ("Как установить ИИ-Ассистент в СёрчИнформ КИБ?", "ИИ-Ассистент", ["ai-assistant-installation"], "https://docs.example.org/ai-assistant-installation-windows-company.pdf"),
-    ("Как ИИ-Ассистент отвечает на вопросы по документации?", "ИИ-Ассистент", ["ai_si_long", "ai_si_short"], "https://docs.example.org/ai_si_long.pdf"),
-    ("Как настроить аудит данных в Файловом аудиторе?", "Файловый аудитор", ["fileauditor_description"], "https://docs.example.org/fileauditor_description.pdf"),
-    ("Как FileAuditor сканирует файлы на агентах?", "Файловый аудитор", ["fileauditor_agent_scanning"], "https://docs.example.org/fileauditor_agent_scanning.pdf"),
-    ("Как настроить метки и классификацию файлов?", "Файловый аудитор", ["fileauditor_labels_guide"], "https://docs.example.org/FileAuditor_Labels_Guide.pdf"),
-    ("Как установить FileAuditor на Windows и Linux?", "Файловый аудитор", ["fileauditor_installation", "fileauditor_installation_linux"], "https://docs.example.org/FileAuditor_installation.pdf"),
-    ("Как подготовить систему к установке FileAuditor?", "Файловый аудитор", ["preparation_for_installation_fa", "preparation_for_installation_fa_linux"], "https://docs.example.org/preparation_for_installation_FA.pdf"),
-    ("Какие возможности у СёрчИнформ SIEM?", "SIEM", ["siem_capabilities"], "https://docs.example.org/SIEM_capabilities.pdf"),
-    ("Как устроен сбор и корреляция событий в SIEM?", "SIEM", ["siem_help", "siem_description"], "https://docs.example.org/SIEM_help.pdf"),
-    ("Как создать правило корреляции событий в SIEM?", "SIEM", ["cross-correlation"], "https://docs.example.org/Cross-Correlation_Rules_Setup.pdf"),
-    ("Как настроить автоматическое реагирование на инциденты?", "SIEM", ["automatic_incident_response"], "https://docs.example.org/Automatic_incident_response.pdf"),
-    ("Как настроить интеграцию SIEM с ГосСОПКА?", "SIEM", ["configure_integration_siem_with_gossopka"], "https://docs.example.org/Configure_integration_SIEM_with_GosSOPKA.pdf"),
-    ("Как установить SIEM на Linux?", "SIEM", ["installation_siem", "siem_installation_on_linux"], "https://docs.example.org/installation_SIEM.pdf"),
-    ("Как настроить мониторинг безопасности и оповещения?", "SIEM", ["monitoring_settings", "alertcenter_help"], "https://docs.example.org/Monitoring_settings.pdf"),
-    ("Как настроить карантин файлов при инциденте?", "SIEM", ["quarantine", "monitoring_settings"], "https://docs.example.org/Quarantine_manual.pdf"),
-    ("Как проверить правила коннекторов (инциденты SIEM)?", "SIEM", ["проверка_правил"], "https://docs.example.org/"),
-    ("Какие психотипы личности выделяет Центр профилирования?", "ProfileCenter", ["profilecenter_description"], "https://docs.example.org/ProfileCenter_description.pdf"),
+    ("Как настроить ICAP-сервис в Search Server?", "КИБ", ["icap_settings", "search_server"], doc_url("ICAP_settings.pdf")),
+    ("Какие задачи решает перехват информации в DLP?", "КИБ", ["dlp-capabilities", "user_manual"], doc_url("dlp-capabilities-windows-company.pdf")),
+    ("Как подготовить систему к установке агента KIB?", "КИБ", ["preparation_for_installation", "preparation_for_installation-linux"], doc_url("preparation_for_installation.pdf")),
+    ("Как развернуть платформу на Linux?", "КИБ", ["kib_company_installation_on_linux", "siem_installation_on_linux"], doc_url("KIB_company_installation_on_Linux.pdf")),
+    ("Как установить клиентские части агента KIB?", "КИБ", ["client_parts_installation"], doc_url("Client_parts_installation.pdf")),
+    ("Как настроить перехват электронной почты?", "КИБ", ["kib_company_mail_int_installation"], doc_url("KIB_company_Mail_Int_installation.pdf")),
+    ("Как настроить интеграцию с внешним API?", "КИБ", ["installation_external_api"], doc_url("installation_external_api.pdf")),
+    ("Как обновить платформу до новой версии?", "КИБ", ["kib_company_update_basic", "kib_company_update_on_linux_basic"], doc_url("KIB_company_update_basic.pdf")),
+    ("Как выполнить миграцию на новую платформу?", "СёрчИнформ KIB", ["kib_migration", "siem_migration"], doc_url("KIB_migration.pdf")),
+    ("Как установить ИИ-Ассистент в платформу?", "ИИ-Ассистент", ["ai-assistant-installation"], doc_url("ai-assistant-installation-windows-company.pdf")),
+    ("Как ИИ-Ассистент отвечает на вопросы по документации?", "ИИ-Ассистент", ["ai_si_long", "ai_si_short"], doc_url("ai_si_long.pdf")),
+    ("Как настроить аудит данных в Файловом аудиторе?", "Файловый аудитор", ["fileauditor_description"], doc_url("fileauditor_description.pdf")),
+    ("Как FileAuditor сканирует файлы на агентах?", "Файловый аудитор", ["fileauditor_agent_scanning"], doc_url("fileauditor_agent_scanning.pdf")),
+    ("Как настроить метки и классификацию файлов?", "Файловый аудитор", ["fileauditor_labels_guide"], doc_url("FileAuditor_Labels_Guide.pdf")),
+    ("Как установить FileAuditor на Windows и Linux?", "Файловый аудитор", ["fileauditor_installation", "fileauditor_installation_linux"], doc_url("FileAuditor_installation.pdf")),
+    ("Как подготовить систему к установке FileAuditor?", "Файловый аудитор", ["preparation_for_installation_fa", "preparation_for_installation_fa_linux"], doc_url("preparation_for_installation_FA.pdf")),
+    ("Какие возможности у СёрчИнформ SIEM?", "SIEM", ["siem_capabilities"], doc_url("SIEM_capabilities.pdf")),
+    ("Как устроен сбор и корреляция событий в SIEM?", "SIEM", ["siem_help", "siem_description"], doc_url("SIEM_help.pdf")),
+    ("Как создать правило корреляции событий в SIEM?", "SIEM", ["cross-correlation"], doc_url("Cross-Correlation_Rules_Setup.pdf")),
+    ("Как настроить автоматическое реагирование на инциденты?", "SIEM", ["automatic_incident_response"], doc_url("Automatic_incident_response.pdf")),
+    ("Как настроить интеграцию SIEM с ГосСОПКА?", "SIEM", ["configure_integration_siem_with_gossopka"], doc_url("Configure_integration_SIEM_with_GosSOPKA.pdf")),
+    ("Как установить SIEM на Linux?", "SIEM", ["installation_siem", "siem_installation_on_linux"], doc_url("installation_SIEM.pdf")),
+    ("Как настроить мониторинг безопасности и оповещения?", "SIEM", ["monitoring_settings", "alertcenter_help"], doc_url("Monitoring_settings.pdf")),
+    ("Как настроить карантин файлов при инциденте?", "SIEM", ["quarantine", "monitoring_settings"], doc_url("Quarantine_manual.pdf")),
+    ("Как проверить правила коннекторов (инциденты SIEM)?", "SIEM", ["проверка_правил"], config.DOCS_BASE_URL),
+    ("Какие психотипы личности выделяет Центр профилирования?", "ProfileCenter", ["profilecenter_description"], doc_url("ProfileCenter_description.pdf")),
     ("Как профилирование помогает выявлять инсайдера?", "ProfileCenter", ["profilecenter_user_manual", "dlp-capabilities"], SITE),
     ("Как контролировать рабочее время сотрудников и законно ли это?", "Контроль времени", [], SITE),
-    ("Как оценить эффективность сотрудников средствами company?", "Контроль сотрудников", [], SITE),
-    ("Что показывает веб-аналитика company?", "Веб-аналитика", ["webanalytic_manual"], "https://docs.example.org/WebAnalytic_manual.pdf"),
-    ("Как восстановить работоспособность модулей после сбоя?", "Эксплуатация", ["restoring_functionality"], "https://docs.example.org/restoring_functionality.pdf"),
-    ("Как проверить работоспособность системы и собрать диагностику?", "Эксплуатация", ["bugs_diagnostics"], "https://docs.example.org/Bugs_diagnostics.pdf"),
-    ("Как обновить MongoDB в составе company?", "Эксплуатация", ["mongodb_update"], "https://docs.example.org/MongoDB_update.pdf"),
-    ("Как настроить учётные записи и права доступа?", "Эксплуатация", ["accounts_and_access_rights"], "https://docs.example.org/accounts_and_access_rights.pdf"),
-    ("Как активировать продукт и управлять лицензиями?", "Лицензирование", ["company_activation"], "https://docs.example.org/company_activation.pdf"),
-    ("Как устроено лицензирование продуктов company?", "Лицензирование", ["products_licensing"], "https://docs.example.org/company_Products_Licensing.pdf"),
-    ("Как настроить EndpointController на клиентах?", "Search Server", ["endpointcontroller_help"], "https://docs.example.org/EndpointController_help.pdf"),
-    ("Как работает Search Server и как подключить источники данных?", "Search Server", ["search_server_ru"], "https://docs.example.org/Search_Server_RU.pdf"),
-    ("Как использовать AAServer для автоматизации задач?", "Search Server", ["aaserver_help"], "https://docs.example.org/AAServer_Help.pdf"),
-    ("Как настроить ESHub?", "Search Server", ["eshub_help"], "https://docs.example.org/ESHub_help.pdf"),
-    ("Как настроить DataCenter?", "Search Server", ["datacenter_help"], "https://docs.example.org/DataCenter_help.pdf"),
+    ("Как оценить эффективность сотрудников средствами продуктов компании?", "Контроль сотрудников", [], SITE),
+    ("Что показывает веб-аналитика продуктов компании?", "Веб-аналитика", ["webanalytic_manual"], doc_url("WebAnalytic_manual.pdf")),
+    ("Как восстановить работоспособность модулей после сбоя?", "Эксплуатация", ["restoring_functionality"], doc_url("restoring_functionality.pdf")),
+    ("Как проверить работоспособность системы и собрать диагностику?", "Эксплуатация", ["bugs_diagnostics"], doc_url("Bugs_diagnostics.pdf")),
+    ("Как обновить MongoDB в составе платформы?", "Эксплуатация", ["mongodb_update"], doc_url("MongoDB_update.pdf")),
+    ("Как настроить учётные записи и права доступа?", "Эксплуатация", ["accounts_and_access_rights"], doc_url("accounts_and_access_rights.pdf")),
+    ("Как активировать продукт и управлять лицензиями?", "Лицензирование", ["company_activation"], doc_url("company_activation.pdf")),
+    ("Как устроено лицензирование продуктов company?", "Лицензирование", ["products_licensing"], doc_url("company_Products_Licensing.pdf")),
+    ("Как настроить EndpointController на клиентах?", "Search Server", ["endpointcontroller_help"], doc_url("EndpointController_help.pdf")),
+    ("Как работает Search Server и как подключить источники данных?", "Search Server", ["search_server_ru"], doc_url("Search_Server_RU.pdf")),
+    ("Как использовать AAServer для автоматизации задач?", "Search Server", ["aaserver_help"], doc_url("AAServer_Help.pdf")),
+    ("Как настроить ESHub?", "Search Server", ["eshub_help"], doc_url("ESHub_help.pdf")),
+    ("Как настроить DataCenter?", "Search Server", ["datacenter_help"], doc_url("DataCenter_help.pdf")),
 ]
 
 _cache: dict = {"at": 0.0, "items": []}
