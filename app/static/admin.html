@@ -168,6 +168,7 @@
     <button data-tab="train">Обучение</button>
     <button data-tab="autolearn">Автообучение</button>
     <button data-tab="settings">Настройки</button>
+    <button data-tab="domains">Сфера деятельности</button>
     <button data-tab="docs">Документация</button>
     <button data-tab="index">Индексация</button>
   </nav>
@@ -376,6 +377,15 @@
     </div>
 
     <div class="card">
+      <h2>Ход анализа</h2>
+      <div class="muted" style="margin-bottom:10px">
+        Что сделано за последний прогон и на что обратить внимание. «Закрыто уроком или
+        исправлением» — сколько проблемных запросов уже покрыто материалом обучения.
+      </div>
+      <div id="al-process"></div>
+    </div>
+
+    <div class="card">
       <h2>Ассоциации: темы вопросов</h2>
       <div class="muted" style="margin-bottom:10px">
         Похожие вопросы пользователей, сгруппированные по смыслу. Нажмите на тему, чтобы
@@ -388,9 +398,11 @@
       <h2>Обнаруженные ошибки</h2>
       <div class="muted" style="margin-bottom:10px">
         Запросы с признаками проблемы: дизлайк, отказ при наличии документации,
-        ответ без источников или низкий вердикт модели.
+        ответ без источников или низкий вердикт модели. Показано, что именно не так
+        и чем это уже закрыто.
       </div>
       <div id="al-issues"></div>
+      <div class="row" id="al-issues-pager"></div>
     </div>
 
     <div class="card">
@@ -404,11 +416,34 @@
 
     <div class="card">
       <h2>Оценки запросов</h2>
-      <div class="muted" style="margin-bottom:10px">Вердикты по последним запросам.</div>
+      <div class="muted" style="margin-bottom:10px">
+        Вердикты по последним запросам с постраничным просмотром. Нажмите «Детали»,
+        чтобы увидеть обоснование, предложенный правильный ответ и чем запрос закрыт.
+      </div>
+      <div class="row">
+        <label class="muted">Фильтр</label>
+        <select id="al-eval-filter">
+          <option value="">все</option>
+          <option value="ok">корректные</option>
+          <option value="partial">неполные</option>
+          <option value="wrong">ошибочные</option>
+          <option value="refused_wrongly">напрасно отказал</option>
+          <option value="refused">отказы</option>
+          <option value="problem">только проблемные</option>
+        </select>
+        <label class="muted">На странице</label>
+        <select id="al-eval-size">
+          <option value="10">10</option>
+          <option value="20" selected>20</option>
+          <option value="50">50</option>
+        </select>
+        <span class="muted" id="al-eval-total"></span>
+      </div>
       <table id="al-evals-table">
-        <thead><tr><th>#</th><th>Вопрос</th><th>Вердикт</th><th>Метод</th><th>Оценка</th><th>Обоснование</th></tr></thead>
+        <thead><tr><th>#</th><th>Вопрос</th><th>Вердикт</th><th>Метод</th><th>Оценка</th><th>Обстановка</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
+      <div class="row" id="al-evals-pager"></div>
     </div>
 
     <div class="card">
@@ -433,16 +468,17 @@
       <div class="muted" id="set-default"></div>
     </div>
     <div class="card">
-      <h2>Профиль организации</h2>
+      <h2>Сфера деятельности компании</h2>
       <div class="muted" style="margin-bottom:10px">
-        Профиль адаптирует ассистента под отрасль: системную инструкцию, перечень
-        «Что я умею», категории вопросов и терминологию. Одна база знаний — разные
-        профили для торговли, разработки, производства, юристов, судов, спорта,
-        школ, колледжей и других организаций.
+        Определяет, как ассистент отвечает: системную инструкцию поведения модели,
+        перечень «Что я умею», категории вопросов и терминологию. Выберите направление
+        из списка — его инструкция и настройки подставляются сразу. Направления и их
+        системные инструкции хранятся в базе и редактируются во вкладке
+        «Сфера деятельности».
       </div>
       <div class="row">
         <select id="domain-select" style="max-width:340px"></select>
-        <button class="primary" id="domain-save">Применить профиль</button>
+        <button class="primary" id="domain-save">Применить</button>
         <button id="domain-reset">Вернуть из .env</button>
         <span class="muted" id="domain-msg"></span>
       </div>
@@ -513,6 +549,32 @@
         <thead><tr><th>Вопрос</th><th>Контекст</th><th>Ключевые слова</th><th>По документации</th><th>Источники</th></tr></thead>
         <tbody></tbody>
       </table>
+    </div>
+  </section>
+
+  <section id="tab-domains" class="tab hidden">
+    <div class="card">
+      <div class="row">
+        <h2 style="margin:0">Направления и системные инструкции</h2>
+        <div class="spacer"></div>
+        <button class="primary" id="dom-new">Новое направление</button>
+      </div>
+      <div class="muted" style="margin-bottom:12px">
+        Каждое направление — это сфера деятельности компании: полная системная
+        инструкция поведения модели, перечень «Что я умею», категории вопросов,
+        терминология и примеры вопросов. Всё хранится в базе и редактируется здесь.
+        Активное направление выбирается на вкладке «Настройки» или кнопкой «Сделать
+        активным».
+      </div>
+      <div class="row" style="align-items:flex-start;gap:18px">
+        <div style="flex:0 0 auto;min-width:240px;max-width:320px">
+          <div id="dom-list"></div>
+        </div>
+        <div style="flex:1;min-width:320px">
+          <div id="dom-editor"></div>
+        </div>
+      </div>
+      <span class="muted" id="dom-msg"></span>
     </div>
   </section>
 
@@ -631,6 +693,7 @@ function loadTab(tab) {
   if (tab === 'train') { loadLessons(); loadTraining(); }
   if (tab === 'autolearn') loadAutolearn();
   if (tab === 'settings') { loadSettings(); loadCapabilities(); loadDomain(); loadImages(); loadEval(); }
+  if (tab === 'domains') loadDomains();
   if (tab === 'index') { loadIndex(); loadSites(); }
   if (tab === 'docs') loadDocs();
 }
@@ -1314,7 +1377,9 @@ async function loadCapabilities() {
   (data.groups || []).forEach((group, index) => {
     box.appendChild(capGroupRow(group.title, group.items, index));
   });
-  document.getElementById('cap-msg').textContent = '';
+  document.getElementById('cap-msg').textContent = data.from_domain
+    ? 'Перечень задаётся активным направлением — редактируйте его во вкладке «Сфера деятельности».'
+    : '';
 }
 
 function capGroupRow(title, items, index) {
@@ -1690,13 +1755,17 @@ async function loadSettings() {
   renderParams(data.items || [], data.groups || []);
 }
 
+let domCache = [];
+let domEditing = null;
+
 async function loadDomain() {
   const data = await j('/api/admin/domain');
+  domCache = data.profiles || [];
   const select = document.getElementById('domain-select');
   while (select.firstChild) select.removeChild(select.firstChild);
-  (data.profiles || []).forEach(profile => {
+  domCache.forEach(profile => {
     const option = document.createElement('option');
-    option.value = profile.id;
+    option.value = profile.slug;
     option.textContent = profile.title;
     select.appendChild(option);
   });
@@ -1709,7 +1778,10 @@ function renderDomainInfo(data) {
   const profile = data.profile || {};
   document.getElementById('domain-desc').textContent = profile.description || '';
   const parts = [];
-  if ((profile.categories || []).length) parts.push('Категории вопросов: ' + profile.categories.join(', '));
+  parts.push((profile.system_prompt || '').trim()
+    ? 'Системная инструкция задана (' + profile.system_prompt.length + ' символов)'
+    : 'Системная инструкция: общая из настроек');
+  if ((profile.categories || []).length) parts.push('Категории: ' + profile.categories.join(', '));
   if ((profile.terminology || []).length) parts.push('Термины: ' + profile.terminology.join(', '));
   if ((profile.sample_questions || []).length) parts.push('Примеры вопросов: ' + profile.sample_questions.join('; '));
   document.getElementById('domain-extra').textContent = parts.join(' · ');
@@ -1723,16 +1795,178 @@ document.getElementById('domain-save').addEventListener('click', async () => {
       body: JSON.stringify({ profile: document.getElementById('domain-select').value })
     });
     renderDomainInfo(data);
-    msg.textContent = 'Профиль применён: ' + (data.profile ? data.profile.title : '');
+    msg.textContent = 'Сфера деятельности: ' + (data.profile ? data.profile.title : '');
     loadCapabilities();
   } catch (err) { msg.textContent = 'ошибка: ' + err.message; }
 });
 
 document.getElementById('domain-reset').addEventListener('click', async () => {
-  const data = await j('/api/admin/domain/reset', { method: 'POST' });
+  await j('/api/admin/domain/reset', { method: 'POST' });
   await loadDomain();
   document.getElementById('domain-msg').textContent = 'Вернулись к значению из .env';
   loadCapabilities();
+});
+
+async function loadDomains(keepSlug) {
+  const data = await j('/api/admin/domain');
+  domCache = data.profiles || [];
+  if (keepSlug) domEditing = keepSlug;
+  if (!domEditing || !domCache.some(d => d.slug === domEditing)) {
+    domEditing = data.current || (domCache[0] && domCache[0].slug) || null;
+  }
+  renderDomList(data);
+  renderDomEditor(domCache.find(d => d.slug === domEditing) || null);
+}
+
+function renderDomList(data) {
+  const box = document.getElementById('dom-list');
+  while (box.firstChild) box.removeChild(box.firstChild);
+  domCache.forEach(item => {
+    const active = item.slug === data.current;
+    const head = el('div', { className: 'lesson-head' }, [
+      el('div', { className: 'q', textContent: item.title }),
+      active ? alPill('активно', 'up') : document.createTextNode(''),
+      item.is_builtin ? alPill('встроенное', '') : document.createTextNode('')
+    ]);
+    if (item.slug === domEditing) head.style.borderColor = 'var(--accent)';
+    head.addEventListener('click', () => {
+      domEditing = item.slug;
+      renderDomList(data);
+      renderDomEditor(item);
+    });
+    box.appendChild(el('div', { className: 'lesson' }, [head]));
+  });
+}
+
+function renderDomEditor(item) {
+  const box = document.getElementById('dom-editor');
+  while (box.firstChild) box.removeChild(box.firstChild);
+  const isNew = !item;
+  const value = item || {};
+  box.appendChild(el('div', { className: 'edit' }, [
+    field('Название', 'dom-title', value.title || ''),
+    field('Слаг (латиницей, необязательно)', 'dom-slug', value.slug || ''),
+    field('Описание', 'dom-description', value.description || ''),
+    area('Системная инструкция поведения модели', 'dom-prompt', value.system_prompt || '', 8),
+    area('Что я умею (строка без «-» — раздел, строки с «- » — пункты)', 'dom-caps', formatCaps(value.capabilities || []), 8),
+    area('Категории вопросов (по одной в строке)', 'dom-cats', (value.categories || []).join('\n'), 4),
+    area('Терминология (по одному в строке)', 'dom-terms', (value.terminology || []).join('\n'), 4),
+    area('Примеры вопросов (по одному в строке)', 'dom-questions', (value.sample_questions || []).join('\n'), 4)
+  ]));
+  const actions = el('div', { className: 'row', style: 'margin-top:8px' }, [
+    el('button', { className: 'primary', textContent: isNew ? 'Создать' : 'Сохранить', onclick: saveDomain })
+  ]);
+  if (!isNew) {
+    actions.appendChild(el('button', { textContent: 'Сделать активным', onclick: () => activateDomain(item.slug) }));
+    actions.appendChild(el('button', { textContent: 'Дублировать', onclick: () => duplicateDomain(item.slug) }));
+    actions.appendChild(el('button', { className: 'danger', textContent: 'Удалить', onclick: () => removeDomain(item.slug) }));
+  }
+  actions.appendChild(el('span', { className: 'muted', id: 'dom-editor-msg' }));
+  box.appendChild(actions);
+}
+
+function field(label, id, value) {
+  return el('div', {}, [
+    el('label', { for: id, className: 'muted', textContent: label }),
+    el('input', { id: id, value: value })
+  ]);
+}
+
+function area(label, id, value, rows) {
+  return el('div', {}, [
+    el('label', { for: id, className: 'muted', textContent: label }),
+    el('textarea', { id: id, rows: rows, value: value })
+  ]);
+}
+
+function splitLines(text) {
+  return (text || '').split('\n').map(s => s.trim()).filter(Boolean);
+}
+
+function parseCaps(text) {
+  const groups = [];
+  let current = null;
+  (text || '').split('\n').forEach(raw => {
+    const line = raw.trim();
+    if (!line) return;
+    if (line.startsWith('-')) {
+      if (!current) { current = { title: 'Что я умею', items: [] }; groups.push(current); }
+      current.items.push(line.replace(/^-\s*/, ''));
+    } else {
+      current = { title: line.replace(/:\s*$/, ''), items: [] };
+      groups.push(current);
+    }
+  });
+  return groups.filter(g => g.items.length);
+}
+
+function formatCaps(groups) {
+  const lines = [];
+  (groups || []).forEach(group => {
+    lines.push(group.title);
+    (group.items || []).forEach(item => lines.push('- ' + item));
+    lines.push('');
+  });
+  return lines.join('\n').trim();
+}
+
+function readDomainForm() {
+  return {
+    title: document.getElementById('dom-title').value.trim(),
+    slug: document.getElementById('dom-slug').value.trim() || null,
+    description: document.getElementById('dom-description').value.trim(),
+    system_prompt: document.getElementById('dom-prompt').value.trim(),
+    capabilities: parseCaps(document.getElementById('dom-caps').value),
+    categories: splitLines(document.getElementById('dom-cats').value),
+    terminology: splitLines(document.getElementById('dom-terms').value),
+    sample_questions: splitLines(document.getElementById('dom-questions').value)
+  };
+}
+
+async function saveDomain() {
+  const msg = document.getElementById('dom-editor-msg');
+  const payload = readDomainForm();
+  if (!payload.title) { msg.textContent = 'Укажите название'; return; }
+  try {
+    if (domEditing) await j('/api/admin/domains/' + domEditing, { method: 'PUT', body: JSON.stringify(payload) });
+    else await j('/api/admin/domains', { method: 'POST', body: JSON.stringify(payload) });
+    await loadDomains();
+    await loadDomain();
+    loadCapabilities();
+    document.getElementById('dom-msg').textContent = 'Сохранено';
+  } catch (err) { msg.textContent = 'ошибка: ' + err.message; }
+}
+
+async function activateDomain(slug) {
+  await j('/api/admin/domain', { method: 'PATCH', body: JSON.stringify({ profile: slug }) });
+  await loadDomains(slug);
+  await loadDomain();
+  loadCapabilities();
+  document.getElementById('dom-msg').textContent = 'Активное направление переключено';
+}
+
+async function duplicateDomain(slug) {
+  await j('/api/admin/domains/' + slug + '/duplicate', { method: 'POST' });
+  await loadDomains();
+  document.getElementById('dom-msg').textContent = 'Создана копия';
+}
+
+async function removeDomain(slug) {
+  try {
+    await j('/api/admin/domains/' + slug, { method: 'DELETE' });
+    domEditing = null;
+    await loadDomains();
+    await loadDomain();
+    loadCapabilities();
+    document.getElementById('dom-msg').textContent = 'Направление удалено';
+  } catch (err) { document.getElementById('dom-msg').textContent = 'ошибка: ' + err.message; }
+}
+
+document.getElementById('dom-new').addEventListener('click', () => {
+  domEditing = null;
+  renderDomList({ current: document.getElementById('domain-select').value || '' });
+  renderDomEditor(null);
+  document.getElementById('dom-title').focus();
 });
 
 let settingsModels = [];
@@ -2107,10 +2341,18 @@ function alPill(text, kind) {
   return el('span', { className: 'pill' + (kind ? ' ' + kind : ''), textContent: text });
 }
 
+let alEvalPage = 1;
+let alEvalLimit = 20;
+let alEvalFilter = '';
+let alIssuePage = 1;
+let alIssueLimit = 20;
+const alEvalOpen = new Set();
+
 async function loadAutolearn() {
   if (alTimer) { clearTimeout(alTimer); alTimer = null; }
   const data = await j('/api/admin/autolearn');
   renderAutolearn(data);
+  await Promise.all([loadAlEvals(), loadAlIssues()]);
   if (data.job && data.job.status === 'running') alTimer = setTimeout(loadAutolearn, 4000);
 }
 
@@ -2137,11 +2379,47 @@ function renderAutolearn(data) {
     ['Уроков-кандидатов', summary.candidates || 0]
   ].forEach(pair => metrics.appendChild(el('span', { className: 'muted', textContent: pair[0] + ': ' + pair[1] })));
 
+  renderAlProcess(job, summary);
   renderAlTopics(data.topics || []);
-  renderAlIssues(data.issues || []);
   renderAlCandidates(data.candidates || []);
-  renderAlEvals(data.evals || []);
   renderAlParams(data.params || []);
+}
+
+function renderAlProcess(job, summary) {
+  const box = document.getElementById('al-process');
+  while (box.firstChild) box.removeChild(box.firstChild);
+  const result = job.result || {};
+  const rows = [];
+  const statusText = job.status === 'running' ? 'идёт'
+    : (job.status === 'error' ? 'ошибка' : (job.finished_at ? 'завершён' : 'не запускался'));
+  rows.push(['Статус', statusText]);
+  if (job.stage) rows.push(['Этап', job.stage]);
+  if (job.started_at) rows.push(['Начат', job.started_at]);
+  if (job.finished_at) rows.push(['Завершён', job.finished_at]);
+  if (job.error) rows.push(['Ошибка', job.error]);
+  const labels = {
+    evaluated: 'Переоценено запросов', window: 'Окно анализа', topics: 'Построено тем',
+    judged: 'Разобрано моделью', errors: 'Ошибок разбора', candidates: 'Собрано уроков-кандидатов',
+    problems: 'Проблемных всего', open_issues: 'Открытых ошибок'
+  };
+  Object.keys(result).forEach(key => rows.push([labels[key] || key, result[key]]));
+  const grid = el('div', { className: 'row', style: 'flex-wrap:wrap;gap:18px' });
+  rows.forEach(pair => grid.appendChild(el('div', { style: 'min-width:180px' }, [
+    el('div', { className: 'muted', textContent: pair[0] }),
+    el('div', { style: 'font-weight:600', textContent: String(pair[1]) })
+  ])));
+  box.appendChild(grid);
+
+  const verdicts = (summary.evals || {}).by_verdict || {};
+  const kinds = (summary.issues || {}).by_kind || {};
+  const parts = [];
+  if (Object.keys(verdicts).length) {
+    parts.push('Вердикты: ' + Object.keys(verdicts).map(k => (VERDICT_LABELS[k] || k) + ' — ' + verdicts[k]).join(', '));
+  }
+  if (Object.keys(kinds).length) {
+    parts.push('Типы ошибок: ' + Object.keys(kinds).map(k => (ISSUE_KINDS[k] || k) + ' — ' + kinds[k]).join(', '));
+  }
+  if (parts.length) box.appendChild(el('div', { className: 'muted', style: 'margin-top:10px', textContent: parts.join(' · ') }));
 }
 
 function renderAlTopics(topics) {
@@ -2167,26 +2445,52 @@ function renderAlTopics(topics) {
   });
 }
 
-function renderAlIssues(items) {
+async function loadAlIssues() {
+  const data = await j('/api/admin/autolearn/issues?status=open&limit=' + alIssueLimit
+    + '&offset=' + ((alIssuePage - 1) * alIssueLimit));
+  renderAlIssues(data.items || [], data.total || 0);
+}
+
+function renderAlIssues(items, total) {
   const box = document.getElementById('al-issues');
   while (box.firstChild) box.removeChild(box.firstChild);
-  if (!items.length) { box.appendChild(el('div', { className: 'muted', textContent: 'Ошибок не найдено.' })); return; }
+  if (!items.length) {
+    box.appendChild(el('div', { className: 'muted', textContent: 'Ошибок не найдено.' }));
+    renderAlIssuesPager(total);
+    return;
+  }
   items.forEach(item => {
+    const closing = item.lesson_id ? 'закрыто уроком #' + item.lesson_id
+      : (item.topic_id ? 'отнесено к теме #' + item.topic_id : 'не закрыто');
     const actions = el('div', { className: 'row', style: 'margin:6px 0 0' }, [
       el('button', { textContent: 'Скрыть', onclick: async () => {
         await j('/api/admin/autolearn/issues/' + item.id + '/dismiss', { method: 'POST' });
         loadAutolearn();
       }}),
       alPill(ISSUE_KINDS[item.kind] || item.kind, 'down'),
+      alPill(closing, item.lesson_id ? 'up' : ''),
       item.vote === 'down' ? alPill('👎', 'down') : document.createTextNode('')
     ]);
     box.appendChild(el('div', { className: 'lesson' }, [
       el('div', { className: 'q', textContent: '#' + item.request_id + ' · ' + (item.question || '') }),
       el('div', { className: 'muted', textContent: 'Ответ: ' + (item.answer || '') }),
-      el('div', { className: 'muted', textContent: item.detail || '' }),
+      el('div', { className: 'muted', textContent: 'Что не так: ' + (item.detail || '—') }),
       actions
     ]));
   });
+  renderAlIssuesPager(total);
+}
+
+function renderAlIssuesPager(total) {
+  const pager = document.getElementById('al-issues-pager');
+  while (pager.firstChild) pager.removeChild(pager.firstChild);
+  const pages = Math.max(1, Math.ceil(total / alIssueLimit));
+  if (pages < 2) return;
+  pager.appendChild(el('button', { textContent: 'Назад', disabled: alIssuePage === 1,
+    onclick: () => { alIssuePage -= 1; loadAlIssues(); } }));
+  pager.appendChild(el('span', { className: 'muted', textContent: 'Страница ' + alIssuePage + ' из ' + pages + ' (всего ' + total + ')' }));
+  pager.appendChild(el('button', { textContent: 'Вперёд', disabled: alIssuePage === pages,
+    onclick: () => { alIssuePage += 1; loadAlIssues(); } }));
 }
 
 function renderAlCandidates(items) {
@@ -2214,19 +2518,67 @@ function renderAlCandidates(items) {
   });
 }
 
-function renderAlEvals(items) {
+async function loadAlEvals() {
+  let query = 'limit=' + alEvalLimit + '&offset=' + ((alEvalPage - 1) * alEvalLimit);
+  if (alEvalFilter === 'problem') query += '&only_problems=true';
+  else if (alEvalFilter) query += '&verdict=' + encodeURIComponent(alEvalFilter);
+  const data = await j('/api/admin/autolearn/evals?' + query);
+  renderAlEvals(data.items || [], data.total || 0);
+}
+
+function renderAlEvals(items, total) {
   const body = document.querySelector('#al-evals-table tbody');
   while (body.firstChild) body.removeChild(body.firstChild);
+  document.getElementById('al-eval-total').textContent = 'всего: ' + total;
+  if (!items.length) {
+    body.appendChild(el('tr', {}, [el('td', { colSpan: 7, className: 'muted', textContent: 'Нет записей по фильтру.' })]));
+  }
   items.forEach(item => {
+    const id = item.request_id;
+    const isOpen = alEvalOpen.has(id);
+    const closing = item.lesson
+      ? 'урок #' + item.lesson.id + ' (' + (item.lesson.status === 'active' ? 'активен' : 'кандидат') + ')'
+      : (item.correction ? 'исправление #' + item.correction.id : '—');
     body.appendChild(el('tr', {}, [
-      el('td', { textContent: '#' + item.request_id }),
+      el('td', { textContent: '#' + id }),
       el('td', { textContent: item.question || '' }),
       el('td', {}, [alPill(VERDICT_LABELS[item.verdict] || item.verdict, verdictPill(item.verdict))]),
       el('td', { textContent: item.method === 'llm' ? 'модель' : 'эвристика' }),
       el('td', { textContent: (item.score === null || item.score === undefined) ? '—' : Number(item.score).toFixed(2) }),
-      el('td', { className: 'muted', textContent: item.reason || '' })
+      el('td', { className: 'muted', textContent: closing }),
+      el('td', {}, [el('button', { textContent: isOpen ? 'Скрыть' : 'Детали', onclick: () => {
+        if (isOpen) alEvalOpen.delete(id); else alEvalOpen.add(id);
+        loadAlEvals();
+      } })])
     ]));
+    if (!isOpen) return;
+    const details = [];
+    details.push(el('div', { className: 'muted', textContent: 'Обоснование: ' + (item.reason || '—') }));
+    if (item.suggested_answer) details.push(el('div', { textContent: 'Предложенный ответ: ' + item.suggested_answer }));
+    if (item.answer) details.push(el('div', { className: 'muted', textContent: 'Ответ ассистента: ' + item.answer }));
+    details.push(el('div', { className: 'muted', textContent:
+      'Оценка пользователя: ' + (item.vote === 'down' ? '👎' : (item.vote === 'up' ? '👍' : 'нет'))
+      + ' · пользователь ' + (item.username || '—') + ' · ' + (item.requested_at || '') }));
+    if (item.corrected) details.push(el('div', { className: 'muted', textContent: 'Запрос помечен как исправленный' }));
+    const issuePills = (item.issues || []).map(x => alPill(ISSUE_KINDS[x.kind] || x.kind, x.status === 'open' ? 'down' : ''));
+    if (issuePills.length) details.push(el('div', { className: 'row' }, issuePills));
+    details.push(el('div', { className: 'muted', textContent: item.lesson
+      ? 'Закрыто уроком: ' + (item.lesson.topic || '')
+      : (item.correction ? 'Закрыто исправлением #' + item.correction.id : 'Пока не закрыто ни уроком, ни исправлением') }));
+    body.appendChild(el('tr', {}, [el('td', { colSpan: 7 }, [el('div', { style: 'padding:8px 4px' }, details)])]));
   });
+  renderAlEvalsPager(total);
+}
+
+function renderAlEvalsPager(total) {
+  const pager = document.getElementById('al-evals-pager');
+  while (pager.firstChild) pager.removeChild(pager.firstChild);
+  const pages = Math.max(1, Math.ceil(total / alEvalLimit));
+  pager.appendChild(el('button', { textContent: 'Назад', disabled: alEvalPage === 1,
+    onclick: () => { alEvalPage -= 1; loadAlEvals(); } }));
+  pager.appendChild(el('span', { className: 'muted', textContent: 'Страница ' + alEvalPage + ' из ' + pages }));
+  pager.appendChild(el('button', { textContent: 'Вперёд', disabled: alEvalPage === pages,
+    onclick: () => { alEvalPage += 1; loadAlEvals(); } }));
 }
 
 function renderAlParams(items) {
@@ -2271,6 +2623,18 @@ async function runAutolearn(llm) {
 
 document.getElementById('al-run').addEventListener('click', () => runAutolearn(false));
 document.getElementById('al-run-llm').addEventListener('click', () => runAutolearn(true));
+
+document.getElementById('al-eval-filter').addEventListener('change', e => {
+  alEvalFilter = e.target.value;
+  alEvalPage = 1;
+  loadAlEvals();
+});
+
+document.getElementById('al-eval-size').addEventListener('change', e => {
+  alEvalLimit = parseInt(e.target.value, 10) || 20;
+  alEvalPage = 1;
+  loadAlEvals();
+});
 
 document.getElementById('al-params-save').addEventListener('click', async () => {
   const msg = document.getElementById('al-params-msg');

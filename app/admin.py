@@ -194,12 +194,26 @@ class AutolearnRun(BaseModel):
     llm: bool | None = None
 
 
+def _enrich_evals(items: list[dict]) -> None:
+    """Добавляет к оценкам ошибки запроса и признак, чем вопрос уже закрыт."""
+    lessons_map: dict = {}
+    for item in appdb.list_lessons():
+        key = (item.get("question") or "").strip().lower()
+        if key and key not in lessons_map:
+            lessons_map[key] = {"id": item["id"], "topic": item.get("topic"), "status": item.get("status")}
+    corrections_map = appdb.correction_ids_by_question()
+    for item in items:
+        item["issues"] = appdb.issues_for_request(item["request_id"])
+        covered = autolearn.coverage(item.get("question"), lessons_map, corrections_map)
+        item["lesson"] = covered["lesson"]
+        item["correction"] = covered["correction"]
+
+
 @router.get("/autolearn")
 def autolearn_overview(
-    limit: int = 100,
     user: dict = Depends(auth.require_admin),
 ) -> dict:
-    """Подробный обзор автообучения: оценки, ошибки, ассоциации, кандидаты."""
+    """Обзор автообучения: сводка, состояние прогона, темы, кандидаты, параметры."""
     topics = [
         {**topic, "members": appdb.topic_requests(topic["id"], limit=8)}
         for topic in appdb.list_topics()
@@ -207,13 +221,49 @@ def autolearn_overview(
     return {
         "summary": autolearn.summary(),
         "job": autolearn.job.snapshot(),
-        "evals": appdb.list_request_evals(limit=limit),
-        "problems": appdb.list_request_evals(limit=limit, only_problems=True),
-        "issues": appdb.list_issues(status="open", limit=limit),
         "topics": topics,
         "candidates": appdb.list_lessons(status="candidate"),
         "params": [item for item in settings.describe() if item["group"] == settings.AUTOLEARN],
+        "totals": {
+            "evals": appdb.count_request_evals(),
+            "problems": appdb.count_request_evals(only_problems=True),
+            "issues": appdb.count_issues("open"),
+        },
     }
+
+
+@router.get("/autolearn/evals")
+def autolearn_evals(
+    offset: int = 0,
+    limit: int = 20,
+    verdict: str | None = None,
+    only_problems: bool = False,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    """Постраничный список оценок запросов с деталями по каждому проблемному."""
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    items = appdb.list_request_evals(
+        limit=limit, offset=offset, verdict=verdict or None, only_problems=only_problems
+    )
+    _enrich_evals(items)
+    total = appdb.count_request_evals(verdict or None, only_problems)
+    return {"items": items, "total": total, "offset": offset, "limit": limit}
+
+
+@router.get("/autolearn/issues")
+def autolearn_issues(
+    offset: int = 0,
+    limit: int = 20,
+    status: str | None = "open",
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    """Постраничный список обнаруженных ошибок."""
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    items = appdb.list_issues(status=status, limit=limit, offset=offset)
+    total = appdb.count_issues(status)
+    return {"items": items, "total": total, "offset": offset, "limit": limit}
 
 
 @router.post("/autolearn/run", status_code=202)
@@ -790,6 +840,7 @@ def get_capabilities(user: dict = Depends(auth.require_admin)) -> dict:
     return {
         "groups": capabilities_mod.groups(),
         "custom": capabilities_mod.is_custom(),
+        "from_domain": bool(domains.capabilities()),
         "source": capabilities_mod.source(),
         "text": capabilities_mod.render(),
     }
@@ -804,7 +855,12 @@ def update_capabilities(
         saved = capabilities_mod.save_groups(payload.groups)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"groups": saved, "custom": True, "source": "кабинет администратора"}
+    return {
+        "groups": saved,
+        "custom": True,
+        "from_domain": bool(domains.capabilities()),
+        "source": capabilities_mod.source(),
+    }
 
 
 @router.post("/capabilities/reset")
@@ -813,51 +869,121 @@ def reset_capabilities(user: dict = Depends(auth.require_admin)) -> dict:
     return {
         "groups": saved,
         "custom": False,
+        "from_domain": bool(domains.capabilities()),
         "source": capabilities_mod.source(),
     }
 
 
-class DomainUpdate(BaseModel):
+class DomainSelect(BaseModel):
     profile: str
 
 
-@router.get("/domain")
-def get_domain(user: dict = Depends(auth.require_admin)) -> dict:
-    """Доменный профиль: активный и каталог доступных."""
+class DomainCreate(BaseModel):
+    title: str = Field(min_length=1, max_length=200)
+    slug: str | None = None
+    description: str | None = None
+    system_prompt: str | None = None
+    capabilities: list[dict] | None = None
+    categories: list[str] | None = None
+    terminology: list[str] | None = None
+    sample_questions: list[str] | None = None
+
+
+class DomainUpdate(BaseModel):
+    title: str | None = None
+    slug: str | None = None
+    description: str | None = None
+    system_prompt: str | None = None
+    capabilities: list[dict] | None = None
+    categories: list[str] | None = None
+    terminology: list[str] | None = None
+    sample_questions: list[str] | None = None
+
+
+def _domain_catalog() -> dict:
     current = domains.current()
     return {
-        "current": current["id"],
-        "profile": {
-            "id": current["id"],
-            "title": current["title"],
-            "description": current["description"],
-            "categories": current["categories"],
-            "sample_questions": current["sample_questions"],
-            "terminology": current["terminology"],
-        },
+        "current": current.get("slug", ""),
+        "profile": current,
         "profiles": domains.list_profiles(),
-        "prompt_addon": domains.prompt_addon(),
-        "default": domains.DEFAULT_ID,
+        "default": domains.DEFAULT_SLUG,
         "env": config.DOMAIN_PROFILE,
     }
 
 
+@router.get("/domain")
+def get_domain(user: dict = Depends(auth.require_admin)) -> dict:
+    """Сфера деятельности: активное направление и каталог."""
+    return _domain_catalog()
+
+
 @router.patch("/domain")
-def update_domain(
-    payload: DomainUpdate,
+def select_domain(
+    payload: DomainSelect,
     user: dict = Depends(auth.require_admin),
 ) -> dict:
+    """Выбрать сферу деятельности: подставляются её инструкция и настройки."""
     try:
         domains.set_profile(payload.profile)
+        capabilities_mod.reset_groups()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return get_domain(user)
+    return _domain_catalog()
 
 
 @router.post("/domain/reset")
 def reset_domain(user: dict = Depends(auth.require_admin)) -> dict:
     domains.reset()
-    return get_domain(user)
+    capabilities_mod.reset_groups()
+    return _domain_catalog()
+
+
+@router.post("/domains", status_code=201)
+def create_domain(
+    payload: DomainCreate,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    try:
+        return domains.create(payload.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/domains/{slug}")
+def update_domain(
+    slug: str,
+    payload: DomainUpdate,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    try:
+        return domains.update(slug, payload.model_dump(exclude_none=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/domains/{slug}")
+def delete_domain(
+    slug: str,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    try:
+        removed = domains.delete(slug)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not removed:
+        raise HTTPException(status_code=404, detail="Направление не найдено")
+    return {"ok": True}
+
+
+@router.post("/domains/{slug}/duplicate", status_code=201)
+def duplicate_domain(
+    slug: str,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    try:
+        return domains.duplicate(slug)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 class SiteCreate(BaseModel):

@@ -359,6 +359,27 @@ def summary() -> dict:
     }
 
 
+def coverage(question: str, lessons_map: dict | None = None, corrections_map: dict | None = None) -> dict:
+    """Чем проблемный вопрос уже закрыт: активным/кандидатным уроком или исправлением."""
+    target = (question or "").strip().lower()
+    out: dict = {"lesson": None, "correction": None}
+    if not target:
+        return out
+    if lessons_map is None:
+        lessons_map = {}
+        for item in appdb.list_lessons():
+            key = (item.get("question") or "").strip().lower()
+            if key and key not in lessons_map:
+                lessons_map[key] = {"id": item["id"], "topic": item.get("topic"), "status": item.get("status")}
+    out["lesson"] = lessons_map.get(target)
+    if corrections_map is None:
+        corrections_map = appdb.correction_ids_by_question()
+    correction_id = corrections_map.get(target)
+    if correction_id:
+        out["correction"] = {"id": correction_id}
+    return out
+
+
 def refresh(llm: bool | None = None, progress=None) -> dict:
     """Полный прогон: эвристики → ассоциации → LLM-оценка → уроки-кандидаты."""
     if llm is None:
@@ -377,6 +398,8 @@ def refresh(llm: bool | None = None, progress=None) -> dict:
         if progress:
             progress("Сбор уроков-кандидатов")
         result["candidates"] = len(generate_candidates())
+    result["problems"] = appdb.eval_summary()["problems"]
+    result["open_issues"] = appdb.issue_summary()["open"]
     return result
 
 

@@ -1,36 +1,41 @@
-"""Профили домена: адаптация ассистента под отрасль и компанию.
+"""Сфера деятельности компании: направления и их системные инструкции.
 
-Одна база знаний, но разные настройки под торговлю, разработку, производство,
-юридические и судебные структуры, спорт, школы, колледжи и другие организации.
-Профиль задаёт надстройку к системному промпту, перечень возможностей «Что я умею»,
-категории вопросов и терминологию. Активный профиль хранится в таблице `settings`
-(ключ `domain_profile`), значение по умолчанию — из переменной `DOMAIN_PROFILE`.
+Каталог направлений хранится в таблице `domains` (SQLite) и редактируется из
+кабинета администратора. Направление задаёт полную системную инструкцию поведения
+модели, перечень возможностей «Что я умею», категории вопросов, терминологию и
+примеры вопросов. Активное направление хранится в таблице `settings`
+(ключ `domain_profile`), значение по умолчанию — переменная `DOMAIN_PROFILE`.
+
+При первом запуске таблица наполняется встроенными направлениями (SEED). Их можно
+свободно редактировать и удалять, как свои.
 """
+
+import re
 
 import appdb
 import config
 import settings
 
 SETTING_KEY = "domain_profile"
-DEFAULT_ID = "general"
+DEFAULT_SLUG = "general"
 
-PROFILES: list[dict] = [
+SEED: list[dict] = [
     {
-        "id": "general",
+        "slug": "general",
         "title": "Универсальный",
-        "description": "Нейтральный профиль без отраслевых акцентов — подходит любой документации.",
-        "prompt_addon": "",
+        "description": "Нейтральное направление без отраслевых акцентов — подходит любой документации.",
+        "addon": "",
         "capabilities": [],
         "categories": ["общее", "инструкции", "регламенты", "частые вопросы"],
         "sample_questions": [],
         "terminology": [],
     },
     {
-        "id": "retail",
+        "slug": "retail",
         "title": "Торговля и ритейл",
         "description": "Магазины, маркетплейсы, опт и розница: товары, цены, кассы, склад, доставка, возвраты.",
-        "prompt_addon": (
-            "Профиль: торговля и ритейл. Отвечай как ассистент торговой компании: "
+        "addon": (
+            "Сфера деятельности: торговля и ритейл. Отвечай как ассистент торговой компании: "
             "товары и каталог, цены и акции, кассовые операции, складской учёт, "
             "логистика и доставка, возврат и гарантия, работа с покупателем. "
             "Если в вопросе есть артикул или SKU — используй его."
@@ -54,11 +59,11 @@ PROFILES: list[dict] = [
         "terminology": ["SKU", "артикул", "промо", "инвентаризация", "приёмка", "ретейл"],
     },
     {
-        "id": "development",
+        "slug": "development",
         "title": "Разработка и IT",
         "description": "Продуктовые и инженерные команды: код, API, архитектура, релизы, DevOps, безопасность.",
-        "prompt_addon": (
-            "Профиль: разработка и IT. Отвечай как технический ассистент: "
+        "addon": (
+            "Сфера деятельности: разработка и IT. Отвечай как технический ассистент: "
             "API и интеграции, архитектура и сервисы, релизы и версии, тестирование, "
             "CI/CD, конфигурация, доступы и безопасность. Приводи примеры команд и "
             "фрагменты конфигурации строго из документации."
@@ -82,11 +87,11 @@ PROFILES: list[dict] = [
         "terminology": ["API", "endpoint", "deploy", "релиз", "токен", "лог"],
     },
     {
-        "id": "manufacturing",
+        "slug": "manufacturing",
         "title": "Производство",
         "description": "Заводы и цеха: технологические процессы, оборудование, качество, охрана труда, нормативы.",
-        "prompt_addon": (
-            "Профиль: производство. Отвечай как ассистент производственного предприятия: "
+        "addon": (
+            "Сфера деятельности: производство. Отвечай как ассистент производственного предприятия: "
             "технологические процессы и регламенты, оборудование и его обслуживание, "
             "контроль качества, охрана труда и техника безопасности, нормативы и допуски. "
             "Соблюдай порядок операций строго по документации."
@@ -110,11 +115,11 @@ PROFILES: list[dict] = [
         "terminology": ["ТУ", "регламент", "допуск", "ТБ", "качество", "партия"],
     },
     {
-        "id": "legal",
+        "slug": "legal",
         "title": "Юридические компании",
         "description": "Юрфирмы и юридические отделы: договоры, претензии, шаблоны, сроки, комплаенс.",
-        "prompt_addon": (
-            "Профиль: юридическая компания. Отвечай как ассистент по праву: договоры, "
+        "addon": (
+            "Сфера деятельности: юридическая компания. Отвечай как ассистент по праву: договоры, "
             "претензии и споры, корпоративные документы, шаблоны и формы, сроки и "
             "реквизиты, комплаенс и конфиденциальность. Ссылайся на документ и пункт, "
             "не давай юридических гарантий сверх текста документации."
@@ -138,11 +143,11 @@ PROFILES: list[dict] = [
         "terminology": ["договор", "претензия", "оферта", "акт", "доверенность", "комплаенс"],
     },
     {
-        "id": "judicial",
+        "slug": "judicial",
         "title": "Судебные органы",
         "description": "Суды и судебное делопроизводство: процессуальные документы, регламенты, сроки, образцы.",
-        "prompt_addon": (
-            "Профиль: судебные органы. Отвечай как ассистент по судебному "
+        "addon": (
+            "Сфера деятельности: судебные органы. Отвечай как ассистент по судебному "
             "делопроизводству: процессуальные документы, регламенты судопроизводства, "
             "сроки и порядок подачи, образцы и формы, работа с делами. Точность "
             "формулировок и номеров статей — только из документации."
@@ -166,11 +171,11 @@ PROFILES: list[dict] = [
         "terminology": ["иск", "ходатайство", "определение", "апелляция", "дело", "срок"],
     },
     {
-        "id": "sports",
+        "slug": "sports",
         "title": "Спортивные организации",
         "description": "Клубы и федерации: регламенты соревнований, тренировки, календарь, экипировка, допуск.",
-        "prompt_addon": (
-            "Профиль: спортивная организация. Отвечай как ассистент клуба или федерации: "
+        "addon": (
+            "Сфера деятельности: спортивная организация. Отвечай как ассистент клуба или федерации: "
             "регламенты соревнований, тренировочный процесс, календарь, экипировка, "
             "медицинские требования и допуск, дисциплинарные правила."
         ),
@@ -193,11 +198,11 @@ PROFILES: list[dict] = [
         "terminology": ["регламент", "допуск", "турнир", "экипировка", "стартовый протокол"],
     },
     {
-        "id": "school",
+        "slug": "school",
         "title": "Школы",
         "description": "Общеобразовательные школы: программы, расписание, ФГОС, аттестация, документы для родителей.",
-        "prompt_addon": (
-            "Профиль: школа. Отвечай как ассистент школы: учебные программы и ФГОС, "
+        "addon": (
+            "Сфера деятельности: школа. Отвечай как ассистент школы: учебные программы и ФГОС, "
             "расписание и учебный календарь, аттестация и оценки, воспитательная "
             "работа, документы для родителей, безопасность учащихся."
         ),
@@ -220,11 +225,11 @@ PROFILES: list[dict] = [
         "terminology": ["ФГОС", "расписание", "аттестация", "класс", "учебный план"],
     },
     {
-        "id": "college",
+        "slug": "college",
         "title": "Колледжи и СПО",
         "description": "Колледжи и техникумы: специальности, учебные планы, практики, диплом, приёмная кампания.",
-        "prompt_addon": (
-            "Профиль: колледж (СПО). Отвечай как ассистент колледжа: специальности и "
+        "addon": (
+            "Сфера деятельности: колледж (СПО). Отвечай как ассистент колледжа: специальности и "
             "профессии, учебные планы, практики и трудоустройство, диплом и "
             "квалификация, приёмная кампания и документы абитуриента."
         ),
@@ -247,11 +252,11 @@ PROFILES: list[dict] = [
         "terminology": ["СПО", "специальность", "учебный план", "практика", "диплом"],
     },
     {
-        "id": "healthcare",
+        "slug": "healthcare",
         "title": "Медицина и клиники",
         "description": "Клиники: клинические протоколы, препараты, процедуры, учёт и санэпидемрежим.",
-        "prompt_addon": (
-            "Профиль: медицина. Отвечай как ассистент медицинской организации: "
+        "addon": (
+            "Сфера деятельности: медицина. Отвечай как ассистент медицинской организации: "
             "клинические протоколы и стандарты, препараты и дозировки, процедуры, "
             "учётная документация, санитарно-эпидемиологический режим. Не назначай "
             "лечение и не заменяй врача."
@@ -275,11 +280,11 @@ PROFILES: list[dict] = [
         "terminology": ["протокол", "стандарт", "процедура", "учёт", "санэпидрежим"],
     },
     {
-        "id": "construction",
+        "slug": "construction",
         "title": "Строительство",
         "description": "Стройка и проектирование: СНиП/СП, проектная документация, сметы, охрана труда, приёмка.",
-        "prompt_addon": (
-            "Профиль: строительство. Отвечай как ассистент строительной организации: "
+        "addon": (
+            "Сфера деятельности: строительство. Отвечай как ассистент строительной организации: "
             "проектная и рабочая документация, нормативы и СП, сметы и объёмы, "
             "технология работ, охрана труда, приёмка и исполнительная документация."
         ),
@@ -302,11 +307,11 @@ PROFILES: list[dict] = [
         "terminology": ["СНиП", "СП", "смета", "акт", "приёмка", "чертёж"],
     },
     {
-        "id": "logistics",
+        "slug": "logistics",
         "title": "Логистика и перевозки",
         "description": "Перевозки и склады: маршруты, документы, таможня, сроки, тарифы, инциденты.",
-        "prompt_addon": (
-            "Профиль: логистика и перевозки. Отвечай как ассистент логистической "
+        "addon": (
+            "Сфера деятельности: логистика и перевозки. Отвечай как ассистент логистической "
             "компании: маршруты и графики, перевозочные документы, таможенные "
             "процедуры, тарифы и сроки, обработка инцидентов и претензий."
         ),
@@ -329,11 +334,11 @@ PROFILES: list[dict] = [
         "terminology": ["ТТН", "CMR", "тариф", "декларация", "маршрут"],
     },
     {
-        "id": "finance",
+        "slug": "finance",
         "title": "Финансы и банки",
         "description": "Банки и финансовые организации: продукты, платежи, отчётность, комплаенс, риски.",
-        "prompt_addon": (
-            "Профиль: финансы и банки. Отвечай как ассистент финансовой организации: "
+        "addon": (
+            "Сфера деятельности: финансы и банки. Отвечай как ассистент финансовой организации: "
             "продукты и условия, платежи и переводы, бухгалтерская и финансовая "
             "отчётность, комплаенс и противодействие мошенничеству, управление рисками."
         ),
@@ -356,11 +361,11 @@ PROFILES: list[dict] = [
         "terminology": ["тариф", "платёж", "отчётность", "комплаенс", "ПОД/ФТ"],
     },
     {
-        "id": "government",
+        "slug": "government",
         "title": "Госучреждения",
         "description": "Органы власти и МФЦ: административные регламенты, госуслуги, обращения граждан.",
-        "prompt_addon": (
-            "Профиль: государственное учреждение. Отвечай как ассистент органа власти "
+        "addon": (
+            "Сфера деятельности: государственное учреждение. Отвечай как ассистент органа власти "
             "или МФЦ: административные регламенты, порядок предоставления госуслуг, "
             "перечень документов, обработка обращений граждан, сроки рассмотрения."
         ),
@@ -383,11 +388,11 @@ PROFILES: list[dict] = [
         "terminology": ["регламент", "госуслуга", "заявление", "обращение", "МФЦ"],
     },
     {
-        "id": "hr",
+        "slug": "hr",
         "title": "Кадры и HR",
         "description": "HR-службы: приём и увольнение, отпуска, кадровые документы, охрана труда, обучение.",
-        "prompt_addon": (
-            "Профиль: кадры и HR. Отвечай как ассистент HR-службы: приём и увольнение, "
+        "addon": (
+            "Сфера деятельности: кадры и HR. Отвечай как ассистент HR-службы: приём и увольнение, "
             "отпуска и больничные, кадровое делопроизводство, трудовые нормы, обучение "
             "и развитие персонала, охрана труда."
         ),
@@ -410,11 +415,11 @@ PROFILES: list[dict] = [
         "terminology": ["приказ", "ТК", "отпуск", "табель", "должностная инструкция"],
     },
     {
-        "id": "media",
+        "slug": "media",
         "title": "СМИ и медиа",
         "description": "Редакции и медиа: редакционная политика, стандарты, права и лицензии, архивы.",
-        "prompt_addon": (
-            "Профиль: СМИ и медиа. Отвечай как ассистент редакции: редакционная "
+        "addon": (
+            "Сфера деятельности: СМИ и медиа. Отвечай как ассистент редакции: редакционная "
             "политика и стандарты, работа с источниками и авторскими правами, "
             "лицензии и использование материалов, архив и публикации."
         ),
@@ -437,11 +442,11 @@ PROFILES: list[dict] = [
         "terminology": ["лицензия", "право", "источник", "публикация", "архив"],
     },
     {
-        "id": "nonprofit",
+        "slug": "nonprofit",
         "title": "НКО и фонды",
         "description": "Некоммерческие организации: устав, проекты, гранты, отчётность, волонтёры, доноры.",
-        "prompt_addon": (
-            "Профиль: НКО и фонды. Отвечай как ассистент некоммерческой организации: "
+        "addon": (
+            "Сфера деятельности: НКО и фонды. Отвечай как ассистент некоммерческой организации: "
             "устав и внутренние положения, проекты и программы, гранты и отчётность, "
             "работа с волонтёрами и донорами, публичные отчёты."
         ),
@@ -465,43 +470,101 @@ PROFILES: list[dict] = [
     },
 ]
 
-_BY_ID = {profile["id"]: profile for profile in PROFILES}
+_TRANSLIT = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e", "ж": "zh",
+    "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m", "н": "n", "о": "o",
+    "п": "p", "р": "r", "с": "s", "т": "t", "у": "u", "ф": "f", "х": "h", "ц": "c",
+    "ч": "ch", "ш": "sh", "щ": "sch", "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu",
+    "я": "ya",
+}
+
+_seed_done = False
+
+
+def _base_prompt() -> str:
+    return settings.value("SYSTEM_PROMPT", config.SYSTEM_PROMPT)
+
+
+def ensure_seed() -> None:
+    """Наполнить таблицу направлений встроенным каталогом при первом запуске."""
+    global _seed_done
+    if _seed_done:
+        return
+    appdb.ensure_schema()
+    if appdb.count_domains() == 0:
+        base = _base_prompt()
+        for item in SEED:
+            addon = item.get("addon", "")
+            prompt = f"{base}\n\n{addon}" if addon else base
+            appdb.insert_domain(
+                slug=item["slug"],
+                title=item["title"],
+                description=item.get("description", ""),
+                system_prompt=prompt,
+                capabilities=item.get("capabilities", []),
+                categories=item.get("categories", []),
+                terminology=item.get("terminology", []),
+                sample_questions=item.get("sample_questions", []),
+                is_builtin=True,
+            )
+    _seed_done = True
+
+
+def slugify(title: str) -> str:
+    text = (title or "").strip().lower()
+    text = "".join(_TRANSLIT.get(ch, ch) for ch in text)
+    text = re.sub(r"[^a-z0-9]+", "-", text).strip("-")
+    return text or "domain"
+
+
+def _unique_slug(base: str, exclude: str | None = None) -> str:
+    candidate = base
+    index = 2
+    while True:
+        existing = appdb.get_domain_by_slug(candidate)
+        if not existing or candidate == exclude:
+            return candidate
+        candidate = f"{base}-{index}"
+        index += 1
 
 
 def list_profiles() -> list[dict]:
-    """Каталог профилей для кабинета (без служебных полей)."""
-    return [
-        {
-            "id": p["id"],
-            "title": p["title"],
-            "description": p["description"],
-            "categories": list(p["categories"]),
-            "sample_questions": list(p["sample_questions"]),
-            "terminology": list(p["terminology"]),
-            "has_addon": bool(p["prompt_addon"]),
-        }
-        for p in PROFILES
-    ]
+    """Полный каталог направлений для кабинета."""
+    ensure_seed()
+    return appdb.list_domains()
 
 
 def current_id() -> str:
+    ensure_seed()
+    domains = appdb.list_domains()
+    if not domains:
+        return ""
+    known = {item["slug"] for item in domains}
     stored = (settings.raw(SETTING_KEY) or "").strip()
-    if stored in _BY_ID:
+    if stored in known:
         return stored
     env = (config.DOMAIN_PROFILE or "").strip()
-    if env in _BY_ID:
+    if env in known:
         return env
-    return DEFAULT_ID
+    if DEFAULT_SLUG in known:
+        return DEFAULT_SLUG
+    return domains[0]["slug"]
 
 
 def current() -> dict:
-    return _BY_ID.get(current_id(), _BY_ID[DEFAULT_ID])
+    ensure_seed()
+    item = appdb.get_domain_by_slug(current_id())
+    if item:
+        return item
+    domains = appdb.list_domains()
+    return domains[0] if domains else {}
 
 
-def set_profile(profile_id: str) -> dict:
-    if profile_id not in _BY_ID:
-        raise ValueError(f"Неизвестный профиль: {profile_id}")
-    appdb.set_setting(SETTING_KEY, profile_id)
+def set_profile(slug: str) -> dict:
+    ensure_seed()
+    if not appdb.get_domain_by_slug(slug):
+        raise ValueError(f"Неизвестное направление: {slug}")
+    appdb.set_setting(SETTING_KEY, slug)
     settings.invalidate()
     return current()
 
@@ -512,21 +575,15 @@ def reset() -> dict:
     return current()
 
 
-def prompt_addon() -> str:
-    return current().get("prompt_addon", "")
-
-
 def system_prompt() -> str:
-    """Системный промпт = базовый (из БД или .env) плюс надстройка профиля."""
-    base = settings.value("SYSTEM_PROMPT", config.SYSTEM_PROMPT)
-    addon = prompt_addon()
-    return f"{base}\n\n{addon}" if addon else base
+    """Системная инструкция активного направления (иначе — общая из настроек)."""
+    prompt = (current().get("system_prompt") or "").strip()
+    return prompt or _base_prompt()
 
 
 def capabilities() -> list[dict]:
-    """Группы возможностей профиля (пустой список — использовать базовые)."""
     groups = current().get("capabilities") or []
-    return [{"title": g["title"], "items": list(g["items"])} for g in groups]
+    return [{"title": g.get("title", ""), "items": list(g.get("items", []))} for g in groups]
 
 
 def question_categories() -> list[str]:
@@ -539,3 +596,108 @@ def sample_questions() -> list[str]:
 
 def terminology() -> list[str]:
     return list(current().get("terminology") or [])
+
+
+def create(data: dict) -> dict:
+    """Создать направление. Обязательно поле title."""
+    ensure_seed()
+    title = (data.get("title") or "").strip()
+    if not title:
+        raise ValueError("Нужно название направления")
+    slug = _unique_slug(slugify(data.get("slug") or title))
+    return appdb.insert_domain(
+        slug=slug,
+        title=title,
+        description=(data.get("description") or "").strip(),
+        system_prompt=(data.get("system_prompt") or "").strip(),
+        capabilities=_clean_groups(data.get("capabilities")),
+        categories=_clean_list(data.get("categories")),
+        terminology=_clean_list(data.get("terminology")),
+        sample_questions=_clean_list(data.get("sample_questions")),
+        is_builtin=False,
+    )
+
+
+def update(slug: str, data: dict) -> dict:
+    ensure_seed()
+    existing = appdb.get_domain_by_slug(slug)
+    if not existing:
+        raise ValueError(f"Неизвестное направление: {slug}")
+    fields: dict = {}
+    if "title" in data:
+        title = (data.get("title") or "").strip()
+        if not title:
+            raise ValueError("Нужно название направления")
+        fields["title"] = title
+    if "description" in data:
+        fields["description"] = (data.get("description") or "").strip()
+    if "system_prompt" in data:
+        fields["system_prompt"] = (data.get("system_prompt") or "").strip()
+    if "capabilities" in data:
+        fields["capabilities"] = _clean_groups(data.get("capabilities"))
+    if "categories" in data:
+        fields["categories"] = _clean_list(data.get("categories"))
+    if "terminology" in data:
+        fields["terminology"] = _clean_list(data.get("terminology"))
+    if "sample_questions" in data:
+        fields["sample_questions"] = _clean_list(data.get("sample_questions"))
+    if data.get("slug"):
+        new_slug = _unique_slug(slugify(data["slug"]), exclude=slug)
+        if new_slug and new_slug != slug:
+            fields["slug"] = new_slug
+    updated = appdb.update_domain(slug, **fields)
+    if fields.get("slug") and settings.raw(SETTING_KEY) == slug:
+        appdb.set_setting(SETTING_KEY, fields["slug"])
+        settings.invalidate()
+    return updated or {}
+
+
+def delete(slug: str) -> bool:
+    ensure_seed()
+    if len(appdb.list_domains()) <= 1:
+        raise ValueError("Нельзя удалить последнее направление")
+    removed = appdb.delete_domain(slug)
+    if removed and settings.raw(SETTING_KEY) == slug:
+        appdb.set_setting(SETTING_KEY, "")
+        settings.invalidate()
+    return removed
+
+
+def duplicate(slug: str) -> dict:
+    ensure_seed()
+    source = appdb.get_domain_by_slug(slug)
+    if not source:
+        raise ValueError(f"Неизвестное направление: {slug}")
+    title = source["title"] + " (копия)"
+    new_slug = _unique_slug(slugify(source["slug"] + " copy"))
+    return appdb.insert_domain(
+        slug=new_slug,
+        title=title,
+        description=source.get("description", ""),
+        system_prompt=source.get("system_prompt", ""),
+        capabilities=source.get("capabilities", []),
+        categories=source.get("categories", []),
+        terminology=source.get("terminology", []),
+        sample_questions=source.get("sample_questions", []),
+        is_builtin=False,
+    )
+
+
+def _clean_list(raw) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    return [str(item).strip() for item in raw if str(item).strip()]
+
+
+def _clean_groups(raw) -> list[dict]:
+    if not isinstance(raw, list):
+        return []
+    groups: list[dict] = []
+    for group in raw:
+        if not isinstance(group, dict):
+            continue
+        title = str(group.get("title", "")).strip()
+        items = _clean_list(group.get("items"))
+        if title and items:
+            groups.append({"title": title, "items": items})
+    return groups

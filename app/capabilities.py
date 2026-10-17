@@ -60,7 +60,10 @@ def is_capabilities_question(question: str) -> bool:
 
 
 def groups() -> list[dict]:
-    """Актуальные группы: из БД, если админ их менял, иначе из профиля или кода."""
+    """Актуальные группы: из активного направления, иначе из БД админа, иначе из кода."""
+    domain_groups = domains.capabilities()
+    if domain_groups:
+        return domain_groups
     raw = appdb.get_setting(SETTING_KEY, "")
     if raw:
         try:
@@ -69,18 +72,15 @@ def groups() -> list[dict]:
                 return data
         except json.JSONDecodeError:
             pass
-    domain_groups = domains.capabilities()
-    if domain_groups:
-        return domain_groups
     return [{"title": title, "items": list(items)} for title, items in GROUPS]
 
 
 def source() -> str:
     """Откуда взялся перечень «Что я умею»."""
+    if domains.capabilities():
+        return f"направление: {domains.current().get('title', '')} (БД направлений)"
     if is_custom():
         return "кабинет администратора"
-    if domains.capabilities():
-        return f"профиль: {domains.current()['title']} (app/domains.py)"
     return "код: app/capabilities.py, константа GROUPS"
 
 

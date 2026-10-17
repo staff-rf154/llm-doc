@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+import json
 import os
 import secrets
 import sqlite3
@@ -138,6 +139,20 @@ CREATE TABLE IF NOT EXISTS topic_requests (
     request_id INTEGER NOT NULL,
     score REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (topic_id, request_id)
+);
+CREATE TABLE IF NOT EXISTS domains (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    slug TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    description TEXT NOT NULL DEFAULT '',
+    system_prompt TEXT NOT NULL DEFAULT '',
+    capabilities TEXT NOT NULL DEFAULT '[]',
+    categories TEXT NOT NULL DEFAULT '[]',
+    terminology TEXT NOT NULL DEFAULT '[]',
+    sample_questions TEXT NOT NULL DEFAULT '[]',
+    is_builtin INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
 );
 """
 
@@ -599,6 +614,113 @@ def set_setting(key: str, value: str) -> str:
     return value
 
 
+DOMAIN_JSON_FIELDS = ("capabilities", "categories", "terminology", "sample_questions")
+
+
+def _decode_domain(row: sqlite3.Row) -> dict:
+    item = dict(row)
+    for field in DOMAIN_JSON_FIELDS:
+        try:
+            value = json.loads(item.get(field) or "[]")
+            item[field] = value if isinstance(value, list) else []
+        except json.JSONDecodeError:
+            item[field] = []
+    return item
+
+
+def list_domains() -> list[dict]:
+    ensure_schema()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM domains ORDER BY is_builtin DESC, id"
+        ).fetchall()
+    return [_decode_domain(row) for row in rows]
+
+
+def get_domain_by_slug(slug: str) -> dict | None:
+    ensure_schema()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM domains WHERE slug = ?", (slug,)).fetchone()
+    return _decode_domain(row) if row else None
+
+
+def count_domains() -> int:
+    ensure_schema()
+    with connect() as conn:
+        row = conn.execute("SELECT COUNT(*) AS n FROM domains").fetchone()
+    return int(row["n"])
+
+
+def insert_domain(
+    slug: str,
+    title: str,
+    description: str = "",
+    system_prompt: str = "",
+    capabilities: list | None = None,
+    categories: list | None = None,
+    terminology: list | None = None,
+    sample_questions: list | None = None,
+    is_builtin: bool = False,
+) -> dict:
+    ensure_schema()
+    stamp = now()
+    with _LOCK, connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO domains
+                (slug, title, description, system_prompt, capabilities, categories,
+                 terminology, sample_questions, is_builtin, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                slug,
+                title,
+                description,
+                system_prompt,
+                json.dumps(capabilities or [], ensure_ascii=False),
+                json.dumps(categories or [], ensure_ascii=False),
+                json.dumps(terminology or [], ensure_ascii=False),
+                json.dumps(sample_questions or [], ensure_ascii=False),
+                1 if is_builtin else 0,
+                stamp,
+                stamp,
+            ),
+        )
+    return get_domain_by_slug(slug) or {}
+
+
+def update_domain(slug: str, **fields) -> dict | None:
+    ensure_schema()
+    allowed = {
+        "slug", "title", "description", "system_prompt",
+        "capabilities", "categories", "terminology", "sample_questions",
+    }
+    sets: list[str] = []
+    params: list = []
+    for key, value in fields.items():
+        if key not in allowed:
+            continue
+        if key in DOMAIN_JSON_FIELDS:
+            value = json.dumps(value or [], ensure_ascii=False)
+        sets.append(f"{key} = ?")
+        params.append(value)
+    if not sets:
+        return get_domain_by_slug(slug)
+    sets.append("updated_at = ?")
+    params.append(now())
+    params.append(slug)
+    with _LOCK, connect() as conn:
+        conn.execute(f"UPDATE domains SET {', '.join(sets)} WHERE slug = ?", params)
+    return get_domain_by_slug(fields.get("slug", slug))
+
+
+def delete_domain(slug: str) -> bool:
+    ensure_schema()
+    with _LOCK, connect() as conn:
+        cur = conn.execute("DELETE FROM domains WHERE slug = ?", (slug,))
+        return cur.rowcount > 0
+
+
 def correction_ids_by_question() -> dict[str, int]:
     """Карта «вопрос в нижнем регистре» -> id исправления."""
     ensure_schema()
@@ -948,7 +1070,7 @@ def list_request_evals(
     ensure_schema()
     query = """
         SELECT e.request_id, e.verdict, e.score, e.reason, e.method, e.suggested_answer,
-               e.updated_at, r.question, r.answer, r.username, r.grounded,
+               e.updated_at, r.question, r.answer, r.username, r.grounded, r.corrected,
                r.created_at AS requested_at, t.vote
         FROM request_evals e
         JOIN requests r ON r.id = e.request_id
@@ -966,6 +1088,20 @@ def list_request_evals(
     with connect() as conn:
         rows = conn.execute(query, params).fetchall()
     return [dict(row) for row in rows]
+
+
+def count_request_evals(verdict: str | None = None, only_problems: bool = False) -> int:
+    ensure_schema()
+    query = "SELECT COUNT(*) AS n FROM request_evals e WHERE 1 = 1"
+    params: list = []
+    if verdict:
+        query += " AND e.verdict = ?"
+        params.append(verdict)
+    if only_problems:
+        query += " AND e.verdict IN ('partial', 'wrong', 'refused_wrongly')"
+    with connect() as conn:
+        row = conn.execute(query, params).fetchone()
+    return int(row["n"])
 
 
 def eval_summary() -> dict:
@@ -997,10 +1133,10 @@ def add_issue(request_id: int, kind: str, detail: str = "") -> int | None:
         return int(cur.lastrowid)
 
 
-def list_issues(status: str | None = "open", limit: int = 200) -> list[dict]:
+def list_issues(status: str | None = "open", limit: int = 200, offset: int = 0) -> list[dict]:
     ensure_schema()
     query = """
-        SELECT i.id, i.request_id, i.kind, i.detail, i.status, i.lesson_id, i.created_at,
+        SELECT i.id, i.request_id, i.kind, i.detail, i.status, i.lesson_id, i.topic_id, i.created_at,
                r.question, r.answer, r.username, r.created_at AS requested_at, t.vote
         FROM answer_issues i
         JOIN requests r ON r.id = i.request_id
@@ -1011,10 +1147,32 @@ def list_issues(status: str | None = "open", limit: int = 200) -> list[dict]:
     if status:
         query += " AND i.status = ?"
         params.append(status)
-    query += " ORDER BY i.id DESC LIMIT ?"
-    params.append(limit)
+    query += " ORDER BY i.id DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
     with connect() as conn:
         rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def count_issues(status: str | None = "open") -> int:
+    ensure_schema()
+    query = "SELECT COUNT(*) AS n FROM answer_issues WHERE 1 = 1"
+    params: list = []
+    if status:
+        query += " AND status = ?"
+        params.append(status)
+    with connect() as conn:
+        row = conn.execute(query, params).fetchone()
+    return int(row["n"])
+
+
+def issues_for_request(request_id: int) -> list[dict]:
+    ensure_schema()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT id, kind, detail, status FROM answer_issues WHERE request_id = ? ORDER BY id",
+            (request_id,),
+        ).fetchall()
     return [dict(row) for row in rows]
 
 
