@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 import appdb
 import auth
 import autolearn
+import bootstrap
 import capabilities as capabilities_mod
 import config
 import corrections
@@ -19,6 +20,7 @@ import evaluation
 import images
 import ingest
 import lessons
+import questiongen
 import settings
 import synonymdb
 import vectorstore as vs
@@ -305,6 +307,83 @@ def autolearn_dismiss(
 ) -> dict:
     appdb.update_issue(issue_id, status="dismissed")
     return {"ok": True}
+
+
+class QuestionGenRun(BaseModel):
+    count: int | None = Field(default=None, ge=1, le=100)
+    sources: list[str] | None = None
+    judge: bool | None = None
+
+
+@router.get("/questiongen")
+def questiongen_overview(user: dict = Depends(auth.require_admin)) -> dict:
+    """Проверка на сгенерированных вопросах: состояние и сводка."""
+    return {
+        "job": questiongen.job.snapshot(),
+        "summary": questiongen.summary(),
+        "sources": list(questiongen.SOURCES),
+        "defaults": {
+            "count": questiongen._count(),
+            "sources": questiongen._sources(),
+            "judge": questiongen._judge_enabled(),
+        },
+        "params": [
+            item for item in settings.describe()
+            if item["group"] == settings.AUTOLEARN and item["key"].startswith("QUESTIONGEN_")
+        ],
+    }
+
+
+@router.post("/questiongen/run", status_code=202)
+def questiongen_run(
+    payload: QuestionGenRun | None = None,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    """Сгенерировать вопросы и прогнать их через ассистента (фон)."""
+    payload = payload or QuestionGenRun()
+    return questiongen.job.start(count=payload.count, sources=payload.sources, judge=payload.judge)
+
+
+@router.get("/questiongen/report")
+def questiongen_report(
+    offset: int = 0,
+    limit: int = 20,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    """Постраничный отчёт по сгенерированным вопросам с деталями."""
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    data = questiongen.report(limit=limit, offset=offset)
+    _enrich_evals(data["items"])
+    return data
+
+
+class BootstrapRun(BaseModel):
+    cycles: int | None = Field(default=None, ge=1, le=10)
+    count: int | None = Field(default=None, ge=1, le=200)
+
+
+@router.get("/bootstrap")
+def bootstrap_overview(user: dict = Depends(auth.require_admin)) -> dict:
+    """Первичное обучение: состояние, готовность и параметры."""
+    return {
+        "job": bootstrap.job.snapshot(),
+        "readiness": bootstrap.readiness(),
+        "params": [
+            item for item in settings.describe()
+            if item["group"] == settings.AUTOLEARN and item["key"].startswith("BOOTSTRAP_")
+        ],
+    }
+
+
+@router.post("/bootstrap/run", status_code=202)
+def bootstrap_run(
+    payload: BootstrapRun | None = None,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    """Запустить первичное обучение по активной сфере (принудительно)."""
+    payload = payload or BootstrapRun()
+    return bootstrap.maybe_start("manual", force=True, cycles=payload.cycles, count=payload.count)
 
 
 @router.get("/settings")
@@ -928,6 +1007,7 @@ def select_domain(
         capabilities_mod.reset_groups()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    bootstrap.maybe_start("domain")
     return _domain_catalog()
 
 

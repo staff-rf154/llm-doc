@@ -447,6 +447,57 @@
     </div>
 
     <div class="card">
+      <h2>Первичное обучение по сфере</h2>
+      <div class="muted" style="margin-bottom:10px">
+        Запускается автоматически после загрузки документов при выбранной сфере: прогоняет
+        примеры вопросов направления и сгенерированные вопросы, оценивает ответы, строит
+        темы и уроки-кандидаты за несколько циклов.
+      </div>
+      <div class="row">
+        <span class="muted" id="bs-ready">—</span>
+        <label class="muted">Циклов</label>
+        <input id="bs-cycles" type="number" min="1" max="10" style="max-width:70px">
+        <label class="muted">Вопросов</label>
+        <input id="bs-count" type="number" min="1" max="200" style="max-width:80px">
+        <button class="primary" id="bs-run">Запустить обучение</button>
+        <span class="muted" id="bs-state">—</span>
+      </div>
+      <div class="bar"><div id="bs-bar" style="width:0%"></div></div>
+      <div class="row" id="bs-metrics"></div>
+      <table id="bs-table">
+        <thead><tr><th>Цикл</th><th>Вопросов</th><th>Прогнано</th><th>По документации</th><th>Проблемных</th><th>Кандидатов</th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+
+    <div class="card">
+      <h2>Проверка на сгенерированных вопросах</h2>
+      <div class="muted" style="margin-bottom:10px">
+        Ассистент сам составляет проверочные вопросы по документации, накопленным темам
+        и активной сфере деятельности, отвечает на них и оценивает результат. Отчёт
+        показывает, где ассистент не нашёл или неполно ответил.
+      </div>
+      <div class="row">
+        <label class="muted">Вопросов</label>
+        <input id="qg-count" type="number" min="1" max="100" style="max-width:90px">
+        <label class="muted"><input id="qg-docs" type="checkbox"> документация</label>
+        <label class="muted"><input id="qg-topics" type="checkbox"> темы</label>
+        <label class="muted"><input id="qg-domain" type="checkbox"> сфера</label>
+        <label class="muted"><input id="qg-judge" type="checkbox"> оценка моделью</label>
+        <button class="primary" id="qg-run">Сгенерировать и прогнать</button>
+        <span class="muted" id="qg-state">—</span>
+      </div>
+      <div class="row" id="qg-metrics"></div>
+      <div class="bar"><div id="qg-bar" style="width:0%"></div></div>
+      <div class="muted" id="qg-questions" style="margin-bottom:8px"></div>
+      <table id="qg-table">
+        <thead><tr><th>#</th><th>Вопрос</th><th>Вердикт</th><th>Метод</th><th>Фрагментов</th><th>Обстановка</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="row" id="qg-pager"></div>
+    </div>
+
+    <div class="card">
       <h2>Параметры автообучения</h2>
       <div id="al-params"></div>
       <div class="row">
@@ -691,7 +742,7 @@ function loadTab(tab) {
   if (tab === 'corrections') loadCorrections();
   if (tab === 'synonyms') loadSynonyms();
   if (tab === 'train') { loadLessons(); loadTraining(); }
-  if (tab === 'autolearn') loadAutolearn();
+  if (tab === 'autolearn') { loadAutolearn(); loadQuestionGen(); loadBootstrap(); }
   if (tab === 'settings') { loadSettings(); loadCapabilities(); loadDomain(); loadImages(); loadEval(); }
   if (tab === 'domains') loadDomains();
   if (tab === 'index') { loadIndex(); loadSites(); }
@@ -2646,6 +2697,192 @@ document.getElementById('al-params-save').addEventListener('click', async () => 
     const res = await j('/api/admin/settings/params', { method: 'PATCH', body: JSON.stringify({ values }) });
     msg.textContent = res.requires_reindex && res.requires_reindex.length ? 'Сохранено. ' + res.detail : 'Сохранено';
   } catch (err) { msg.textContent = err.message; }
+});
+
+let qgPage = 1;
+let qgLimit = 20;
+let qgInit = false;
+let qgTimer = null;
+const qgOpen = new Set();
+
+async function loadQuestionGen() {
+  const data = await j('/api/admin/questiongen');
+  const job = data.job || {};
+  const stateEl = document.getElementById('qg-state');
+  if (job.status === 'running') stateEl.textContent = 'идёт: ' + (job.stage || '');
+  else if (job.status === 'error') stateEl.textContent = 'ошибка: ' + (job.error || '');
+  else if (job.finished_at) stateEl.textContent = 'последний прогон: ' + job.finished_at;
+  else stateEl.textContent = 'не запускалось';
+  document.getElementById('qg-bar').style.width = job.status === 'running' ? '100%' : '0%';
+  applyQuestionGenDefaults(data.defaults || {});
+  renderQuestionGenProcess(job, data.summary || {});
+  await loadQuestionGenReport();
+  if (qgTimer) { clearTimeout(qgTimer); qgTimer = null; }
+  if (job.status === 'running') qgTimer = setTimeout(loadQuestionGen, 4000);
+}
+
+function applyQuestionGenDefaults(defaults) {
+  if (qgInit) return;
+  qgInit = true;
+  document.getElementById('qg-count').value = defaults.count || 10;
+  const sources = defaults.sources || [];
+  document.getElementById('qg-docs').checked = sources.includes('docs');
+  document.getElementById('qg-topics').checked = sources.includes('topics');
+  document.getElementById('qg-domain').checked = sources.includes('domain');
+  document.getElementById('qg-judge').checked = !!defaults.judge;
+}
+
+function renderQuestionGenProcess(job, summary) {
+  const result = job.result || {};
+  const box = document.getElementById('qg-metrics');
+  while (box.firstChild) box.removeChild(box.firstChild);
+  [
+    ['Прогнано вопросов', result.ran || 0],
+    ['Ответов по документации', result.grounded || 0],
+    ['Проблемных', result.problems || 0],
+    ['Оценено моделью', result.judged || 0],
+    ['Всего сгенерировано', summary.generated || 0]
+  ].forEach(pair => box.appendChild(el('span', { className: 'muted', textContent: pair[0] + ': ' + pair[1] })));
+  const questions = (job.questions || []).map(item => item.question);
+  document.getElementById('qg-questions').textContent = questions.length
+    ? 'Вопросы прогона: ' + questions.join(' · ')
+    : '';
+}
+
+async function loadQuestionGenReport() {
+  const data = await j('/api/admin/questiongen/report?limit=' + qgLimit + '&offset=' + ((qgPage - 1) * qgLimit));
+  renderQuestionGenReport(data.items || [], data.total || 0);
+}
+
+function renderQuestionGenReport(items, total) {
+  const body = document.querySelector('#qg-table tbody');
+  while (body.firstChild) body.removeChild(body.firstChild);
+  if (!items.length) {
+    body.appendChild(el('tr', {}, [el('td', { colSpan: 7, className: 'muted', textContent: 'Пока пусто — запустите генерацию.' })]));
+  }
+  items.forEach(item => {
+    const id = item.request_id;
+    const isOpen = qgOpen.has(id);
+    const closing = item.lesson
+      ? 'урок #' + item.lesson.id
+      : (item.correction ? 'исправление #' + item.correction.id : '—');
+    body.appendChild(el('tr', {}, [
+      el('td', { textContent: '#' + id }),
+      el('td', { textContent: item.question || '' }),
+      el('td', {}, [alPill(VERDICT_LABELS[item.verdict] || item.verdict, verdictPill(item.verdict))]),
+      el('td', { textContent: item.method === 'llm' ? 'модель' : 'эвристика' }),
+      el('td', { textContent: String(item.sources == null ? 0 : item.sources) }),
+      el('td', { className: 'muted', textContent: closing }),
+      el('td', {}, [el('button', { textContent: isOpen ? 'Скрыть' : 'Детали', onclick: () => {
+        if (isOpen) qgOpen.delete(id); else qgOpen.add(id);
+        loadQuestionGenReport();
+      } })])
+    ]));
+    if (!isOpen) return;
+    const details = [];
+    details.push(el('div', { className: 'muted', textContent: 'Обоснование: ' + (item.reason || '—') }));
+    if (item.suggested_answer) details.push(el('div', { textContent: 'Предложенный ответ: ' + item.suggested_answer }));
+    if (item.answer) details.push(el('div', { className: 'muted', textContent: 'Ответ ассистента: ' + item.answer }));
+    const issuePills = (item.issues || []).map(x => alPill(ISSUE_KINDS[x.kind] || x.kind, x.status === 'open' ? 'down' : ''));
+    if (issuePills.length) details.push(el('div', { className: 'row' }, issuePills));
+    details.push(el('div', { className: 'muted', textContent: item.lesson
+      ? 'Закрыто уроком: ' + (item.lesson.topic || '')
+      : (item.correction ? 'Закрыто исправлением #' + item.correction.id : 'Пока не закрыто ни уроком, ни исправлением') }));
+    body.appendChild(el('tr', {}, [el('td', { colSpan: 7 }, [el('div', { style: 'padding:8px 4px' }, details)])]));
+  });
+  const pager = document.getElementById('qg-pager');
+  while (pager.firstChild) pager.removeChild(pager.firstChild);
+  const pages = Math.max(1, Math.ceil(total / qgLimit));
+  pager.appendChild(el('button', { textContent: 'Назад', disabled: qgPage === 1,
+    onclick: () => { qgPage -= 1; loadQuestionGenReport(); } }));
+  pager.appendChild(el('span', { className: 'muted', textContent: 'Страница ' + qgPage + ' из ' + pages + ' (всего ' + total + ')' }));
+  pager.appendChild(el('button', { textContent: 'Вперёд', disabled: qgPage === pages,
+    onclick: () => { qgPage += 1; loadQuestionGenReport(); } }));
+}
+
+document.getElementById('qg-run').addEventListener('click', async () => {
+  const stateEl = document.getElementById('qg-state');
+  const sources = [];
+  if (document.getElementById('qg-docs').checked) sources.push('docs');
+  if (document.getElementById('qg-topics').checked) sources.push('topics');
+  if (document.getElementById('qg-domain').checked) sources.push('domain');
+  if (!sources.length) { stateEl.textContent = 'выберите хотя бы один источник'; return; }
+  const body = {
+    count: parseInt(document.getElementById('qg-count').value, 10) || 10,
+    sources: sources,
+    judge: document.getElementById('qg-judge').checked
+  };
+  try {
+    stateEl.textContent = 'запускаю…';
+    await j('/api/admin/questiongen/run', { method: 'POST', body: JSON.stringify(body) });
+    loadQuestionGen();
+  } catch (err) { stateEl.textContent = 'ошибка: ' + err.message; }
+});
+
+let bsInit = false;
+let bsTimer = null;
+
+async function loadBootstrap() {
+  const data = await j('/api/admin/bootstrap');
+  const job = data.job || {};
+  const ready = data.readiness || {};
+  document.getElementById('bs-ready').textContent = ready.ready
+    ? 'Готово: ' + (ready.domain_title || ready.domain) + ', документов ' + ready.points + ', вопросов ' + ready.questions
+    : 'Не готово: нет ' + (!ready.points ? 'документов' : 'вопросов сферы');
+  applyBootstrapDefaults(data.params || []);
+  const stateEl = document.getElementById('bs-state');
+  if (job.status === 'running') stateEl.textContent = 'идёт (цикл ' + (job.cycle || 0) + '/' + (job.cycles || 0) + '): ' + (job.stage || '');
+  else if (job.status === 'error') stateEl.textContent = 'ошибка: ' + (job.error || '');
+  else if (job.finished_at) stateEl.textContent = 'завершено: ' + job.finished_at;
+  else stateEl.textContent = 'не запускалось';
+  document.getElementById('bs-bar').style.width = job.status === 'running' ? '100%' : '0%';
+  renderBootstrapCycles(job.result || {});
+  if (bsTimer) { clearTimeout(bsTimer); bsTimer = null; }
+  if (job.status === 'running') bsTimer = setTimeout(loadBootstrap, 4000);
+}
+
+function applyBootstrapDefaults(params) {
+  if (bsInit) return;
+  bsInit = true;
+  const map = {};
+  params.forEach(p => { map[p.key] = p.value; });
+  if (map.BOOTSTRAP_CYCLES != null && map.BOOTSTRAP_CYCLES !== '') document.getElementById('bs-cycles').value = map.BOOTSTRAP_CYCLES;
+  if (map.BOOTSTRAP_COUNT != null && map.BOOTSTRAP_COUNT !== '') document.getElementById('bs-count').value = map.BOOTSTRAP_COUNT;
+}
+
+function renderBootstrapCycles(result) {
+  const cycles = result.cycles || [];
+  const body = document.querySelector('#bs-table tbody');
+  while (body.firstChild) body.removeChild(body.firstChild);
+  if (!cycles.length) {
+    body.appendChild(el('tr', {}, [el('td', { colSpan: 6, className: 'muted', textContent: 'Пока не запускалось.' })]));
+  }
+  cycles.forEach(row => body.appendChild(el('tr', {}, [
+    el('td', { textContent: String(row.cycle) }),
+    el('td', { textContent: String(row.questions || 0) }),
+    el('td', { textContent: String(row.ran || 0) }),
+    el('td', { textContent: String(row.grounded || 0) }),
+    el('td', { textContent: String(row.problems || 0) }),
+    el('td', { textContent: String(row.candidates || 0) })
+  ])));
+  const metrics = document.getElementById('bs-metrics');
+  while (metrics.firstChild) metrics.removeChild(metrics.firstChild);
+  const total = cycles.reduce((acc, row) => acc + (row.ran || 0), 0);
+  metrics.appendChild(el('span', { className: 'muted', textContent: 'Всего прогнано: ' + total }));
+}
+
+document.getElementById('bs-run').addEventListener('click', async () => {
+  const stateEl = document.getElementById('bs-state');
+  const body = {
+    cycles: parseInt(document.getElementById('bs-cycles').value, 10) || 3,
+    count: parseInt(document.getElementById('bs-count').value, 10) || 30
+  };
+  try {
+    stateEl.textContent = 'запускаю…';
+    const res = await j('/api/admin/bootstrap/run', { method: 'POST', body: JSON.stringify(body) });
+    if (res.started === false) stateEl.textContent = 'не запущено: ' + (res.reason || '');
+    loadBootstrap();
+  } catch (err) { stateEl.textContent = 'ошибка: ' + err.message; }
 });
 
 loadOverview();

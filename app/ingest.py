@@ -250,6 +250,7 @@ class ReindexJob:
                 result=result,
             )
             self._start_verification()
+            self._start_bootstrap()
         except Exception as exc:
             self._gate.set()
             self._update(
@@ -266,6 +267,15 @@ class ReindexJob:
             verify.job.start()
         except Exception as exc:
             print(f"сверка исправлений не запущена: {exc}")
+
+    @staticmethod
+    def _start_bootstrap() -> None:
+        try:
+            import bootstrap
+
+            bootstrap.maybe_start("reindex")
+        except Exception as exc:
+            print(f"первичное обучение не запущено: {exc}")
 
     def mark_interrupted(self) -> None:
         with self._lock:

@@ -53,6 +53,19 @@ def startup() -> None:
     except Exception as exc:
         print(f"индекс уроков недоступен: {exc}")
     threading.Thread(target=warm_search, daemon=True).start()
+    threading.Thread(target=_start_bootstrap, daemon=True).start()
+
+
+def _start_bootstrap() -> None:
+    """Первичное обучение, если документы уже загружены и выбрана сфера."""
+    try:
+        import bootstrap
+
+        result = bootstrap.maybe_start("startup")
+        if result.get("started"):
+            print("первичное обучение запущено")
+    except Exception as exc:
+        print(f"первичное обучение не запущено: {exc}")
 
 
 def warm_search() -> None:

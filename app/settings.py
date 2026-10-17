@@ -164,6 +164,18 @@ PARAMS: list[Param] = [
     Param("AUTOLEARN_MIN_TOPIC_HITS", "Проблемных вопросов для урока", "int", group=AUTOLEARN,
           hint="Сколько проблемных обращений в теме нужно, чтобы собрать урок-кандидат"),
     Param("AUTOLEARN_MAX_TOPICS", "Максимум тем", "int", group=AUTOLEARN),
+    Param("QUESTIONGEN_COUNT", "Вопросов для генерации", "int", group=AUTOLEARN,
+          hint="Сколько проверочных вопросов генерировать и прогонять за один запуск"),
+    Param("QUESTIONGEN_SOURCES", "Источники вопросов", group=AUTOLEARN,
+          hint="Список через запятую: docs — из документации, topics — из тем, domain — из сферы деятельности"),
+    Param("QUESTIONGEN_JUDGE", "Оценивать генерацию моделью", "bool", group=AUTOLEARN,
+          hint="После прогона проверить ответы LLM-судьёй и предложить эталоны"),
+    Param("BOOTSTRAP_CYCLES", "Циклов первичного обучения", "int", group=AUTOLEARN,
+          hint="Сколько раз прогонять вопросы сферы при первом обучении после загрузки документов"),
+    Param("BOOTSTRAP_COUNT", "Вопросов в цикле первичного обучения", "int", group=AUTOLEARN,
+          hint="Сколько вопросов сферы прогонять за цикл первичного обучения"),
+    Param("BOOTSTRAP_JUDGE", "Оценивать первичное обучение моделью", "bool", group=AUTOLEARN,
+          hint="Подключать LLM-судью и сбор уроков-кандидатов при первичном обучении"),
 ]
 
 CACHE_TTL = 3.0

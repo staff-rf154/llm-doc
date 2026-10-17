@@ -1066,12 +1066,13 @@ def list_request_evals(
     offset: int = 0,
     verdict: str | None = None,
     only_problems: bool = False,
+    origin: str | None = None,
 ) -> list[dict]:
     ensure_schema()
     query = """
         SELECT e.request_id, e.verdict, e.score, e.reason, e.method, e.suggested_answer,
                e.updated_at, r.question, r.answer, r.username, r.grounded, r.corrected,
-               r.created_at AS requested_at, t.vote
+               r.origin, r.sources, r.created_at AS requested_at, t.vote
         FROM request_evals e
         JOIN requests r ON r.id = e.request_id
         LEFT JOIN ratings t ON t.request_id = r.id
@@ -1083,6 +1084,9 @@ def list_request_evals(
         params.append(verdict)
     if only_problems:
         query += " AND e.verdict IN ('partial', 'wrong', 'refused_wrongly')"
+    if origin:
+        query += " AND r.origin = ?"
+        params.append(origin)
     query += " ORDER BY e.request_id DESC LIMIT ? OFFSET ?"
     params.extend([limit, offset])
     with connect() as conn:
@@ -1090,15 +1094,26 @@ def list_request_evals(
     return [dict(row) for row in rows]
 
 
-def count_request_evals(verdict: str | None = None, only_problems: bool = False) -> int:
+def count_request_evals(
+    verdict: str | None = None,
+    only_problems: bool = False,
+    origin: str | None = None,
+) -> int:
     ensure_schema()
-    query = "SELECT COUNT(*) AS n FROM request_evals e WHERE 1 = 1"
+    query = """
+        SELECT COUNT(*) AS n FROM request_evals e
+        JOIN requests r ON r.id = e.request_id
+        WHERE 1 = 1
+    """
     params: list = []
     if verdict:
         query += " AND e.verdict = ?"
         params.append(verdict)
     if only_problems:
         query += " AND e.verdict IN ('partial', 'wrong', 'refused_wrongly')"
+    if origin:
+        query += " AND r.origin = ?"
+        params.append(origin)
     with connect() as conn:
         row = conn.execute(query, params).fetchone()
     return int(row["n"])
