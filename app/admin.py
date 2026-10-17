@@ -12,6 +12,7 @@ import autolearn
 import capabilities as capabilities_mod
 import config
 import corrections
+import domains
 import docpages
 import documents as docs_mod
 import evaluation
@@ -789,11 +790,7 @@ def get_capabilities(user: dict = Depends(auth.require_admin)) -> dict:
     return {
         "groups": capabilities_mod.groups(),
         "custom": capabilities_mod.is_custom(),
-        "source": (
-            "кабинет администратора"
-            if capabilities_mod.is_custom()
-            else "код: app/capabilities.py, константа GROUPS"
-        ),
+        "source": capabilities_mod.source(),
         "text": capabilities_mod.render(),
     }
 
@@ -816,8 +813,51 @@ def reset_capabilities(user: dict = Depends(auth.require_admin)) -> dict:
     return {
         "groups": saved,
         "custom": False,
-        "source": "код: app/capabilities.py, константа GROUPS",
+        "source": capabilities_mod.source(),
     }
+
+
+class DomainUpdate(BaseModel):
+    profile: str
+
+
+@router.get("/domain")
+def get_domain(user: dict = Depends(auth.require_admin)) -> dict:
+    """Доменный профиль: активный и каталог доступных."""
+    current = domains.current()
+    return {
+        "current": current["id"],
+        "profile": {
+            "id": current["id"],
+            "title": current["title"],
+            "description": current["description"],
+            "categories": current["categories"],
+            "sample_questions": current["sample_questions"],
+            "terminology": current["terminology"],
+        },
+        "profiles": domains.list_profiles(),
+        "prompt_addon": domains.prompt_addon(),
+        "default": domains.DEFAULT_ID,
+        "env": config.DOMAIN_PROFILE,
+    }
+
+
+@router.patch("/domain")
+def update_domain(
+    payload: DomainUpdate,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    try:
+        domains.set_profile(payload.profile)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return get_domain(user)
+
+
+@router.post("/domain/reset")
+def reset_domain(user: dict = Depends(auth.require_admin)) -> dict:
+    domains.reset()
+    return get_domain(user)
 
 
 class SiteCreate(BaseModel):

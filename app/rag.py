@@ -3,6 +3,7 @@ from dataclasses import dataclass
 from openai import OpenAI
 
 import config
+import domains
 import settings
 import vectorstore as vs
 from capabilities import is_capabilities_question, render as render_capabilities
@@ -441,7 +442,7 @@ def ask(question: str, top_k: int | None = None) -> Answer:
     completion = client.chat.completions.create(
         model=settings.value("LLM_MODEL", config.LLM_MODEL),
         messages=[
-            {"role": "system", "content": settings.value("SYSTEM_PROMPT", config.SYSTEM_PROMPT)},
+            {"role": "system", "content": domains.system_prompt()},
             {
                 "role": "user",
                 "content": build_prompt(question, chunks, correction_examples(question)),

@@ -5,6 +5,7 @@ import re
 
 import appdb
 import config
+import domains
 import prompts as prompts_mod
 
 SETTING_KEY = "capabilities"
@@ -59,7 +60,7 @@ def is_capabilities_question(question: str) -> bool:
 
 
 def groups() -> list[dict]:
-    """Актуальные группы: из БД, если админ их менял, иначе из кода."""
+    """Актуальные группы: из БД, если админ их менял, иначе из профиля или кода."""
     raw = appdb.get_setting(SETTING_KEY, "")
     if raw:
         try:
@@ -68,7 +69,19 @@ def groups() -> list[dict]:
                 return data
         except json.JSONDecodeError:
             pass
+    domain_groups = domains.capabilities()
+    if domain_groups:
+        return domain_groups
     return [{"title": title, "items": list(items)} for title, items in GROUPS]
+
+
+def source() -> str:
+    """Откуда взялся перечень «Что я умею»."""
+    if is_custom():
+        return "кабинет администратора"
+    if domains.capabilities():
+        return f"профиль: {domains.current()['title']} (app/domains.py)"
+    return "код: app/capabilities.py, константа GROUPS"
 
 
 def is_custom() -> bool:

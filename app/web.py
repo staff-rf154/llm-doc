@@ -11,6 +11,7 @@ from pydantic import BaseModel, Field
 import appdb
 import auth
 import config
+import domains
 import rag
 import settings
 from capabilities import is_capabilities_question, render as render_capabilities, suggestions
@@ -30,7 +31,7 @@ class ChatRequest(BaseModel):
 
 
 def _history(messages: list[Turn]) -> list[dict]:
-    turns = [{"role": "system", "content": settings.value("SYSTEM_PROMPT", config.SYSTEM_PROMPT)}]
+    turns = [{"role": "system", "content": domains.system_prompt()}]
     for turn in messages[:-1]:
         turns.append({"role": turn.role, "content": turn.content})
     turns.append({"role": "user", "content": messages[-1].content})

@@ -52,6 +52,7 @@ services:
       - ADMIN_USERNAME=${ADMIN_USERNAME:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       - APP_TITLE=${APP_TITLE:-База знаний}
+      - DOMAIN_PROFILE=${DOMAIN_PROFILE:-general}
       - DOCS_BASE_URL=${DOCS_BASE_URL:-}
       - SITE_URL=${SITE_URL:-}
       # настраиваются в кабинете, значения по умолчанию — из .env

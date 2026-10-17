@@ -433,6 +433,23 @@
       <div class="muted" id="set-default"></div>
     </div>
     <div class="card">
+      <h2>Профиль организации</h2>
+      <div class="muted" style="margin-bottom:10px">
+        Профиль адаптирует ассистента под отрасль: системную инструкцию, перечень
+        «Что я умею», категории вопросов и терминологию. Одна база знаний — разные
+        профили для торговли, разработки, производства, юристов, судов, спорта,
+        школ, колледжей и других организаций.
+      </div>
+      <div class="row">
+        <select id="domain-select" style="max-width:340px"></select>
+        <button class="primary" id="domain-save">Применить профиль</button>
+        <button id="domain-reset">Вернуть из .env</button>
+        <span class="muted" id="domain-msg"></span>
+      </div>
+      <div class="muted" id="domain-desc" style="margin-top:10px"></div>
+      <div class="muted" id="domain-extra"></div>
+    </div>
+    <div class="card">
       <h2>Параметры модели и пайплайна</h2>
       <div class="muted" style="margin-bottom:12px">
         Значения переопределяют переменные из .env. Помеченные «требует переиндексации»
@@ -613,7 +630,7 @@ function loadTab(tab) {
   if (tab === 'synonyms') loadSynonyms();
   if (tab === 'train') { loadLessons(); loadTraining(); }
   if (tab === 'autolearn') loadAutolearn();
-  if (tab === 'settings') { loadSettings(); loadCapabilities(); loadImages(); loadEval(); }
+  if (tab === 'settings') { loadSettings(); loadCapabilities(); loadDomain(); loadImages(); loadEval(); }
   if (tab === 'index') { loadIndex(); loadSites(); }
   if (tab === 'docs') loadDocs();
 }
@@ -1672,6 +1689,51 @@ async function loadSettings() {
   settingsModels = data.llm_models || [];
   renderParams(data.items || [], data.groups || []);
 }
+
+async function loadDomain() {
+  const data = await j('/api/admin/domain');
+  const select = document.getElementById('domain-select');
+  while (select.firstChild) select.removeChild(select.firstChild);
+  (data.profiles || []).forEach(profile => {
+    const option = document.createElement('option');
+    option.value = profile.id;
+    option.textContent = profile.title;
+    select.appendChild(option);
+  });
+  select.value = data.current;
+  renderDomainInfo(data);
+  document.getElementById('domain-msg').textContent = '';
+}
+
+function renderDomainInfo(data) {
+  const profile = data.profile || {};
+  document.getElementById('domain-desc').textContent = profile.description || '';
+  const parts = [];
+  if ((profile.categories || []).length) parts.push('Категории вопросов: ' + profile.categories.join(', '));
+  if ((profile.terminology || []).length) parts.push('Термины: ' + profile.terminology.join(', '));
+  if ((profile.sample_questions || []).length) parts.push('Примеры вопросов: ' + profile.sample_questions.join('; '));
+  document.getElementById('domain-extra').textContent = parts.join(' · ');
+}
+
+document.getElementById('domain-save').addEventListener('click', async () => {
+  const msg = document.getElementById('domain-msg');
+  try {
+    const data = await j('/api/admin/domain', {
+      method: 'PATCH',
+      body: JSON.stringify({ profile: document.getElementById('domain-select').value })
+    });
+    renderDomainInfo(data);
+    msg.textContent = 'Профиль применён: ' + (data.profile ? data.profile.title : '');
+    loadCapabilities();
+  } catch (err) { msg.textContent = 'ошибка: ' + err.message; }
+});
+
+document.getElementById('domain-reset').addEventListener('click', async () => {
+  const data = await j('/api/admin/domain/reset', { method: 'POST' });
+  await loadDomain();
+  document.getElementById('domain-msg').textContent = 'Вернулись к значению из .env';
+  loadCapabilities();
+});
 
 let settingsModels = [];
 
