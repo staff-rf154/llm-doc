@@ -24,6 +24,8 @@
     color: var(--text);
     font: 15px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     height: 100vh;
+    height: 100dvh;
+    -webkit-text-size-adjust: 100%;
     display: flex;
     flex-direction: column;
   }
@@ -155,10 +157,10 @@
     z-index: 90;
     border-top: 1px solid var(--border);
     background: var(--panel);
-    padding: 14px 20px;
+    padding: 14px 20px calc(14px + env(safe-area-inset-bottom));
     box-shadow: 0 -1px 6px rgba(0, 0, 0, .35);
   }
-  #app, #auth { padding-bottom: 108px; }
+  #app, #auth { padding-bottom: calc(108px + env(safe-area-inset-bottom)); }
   #form { max-width: 900px; margin: 0 auto; display: flex; gap: 10px; align-items: flex-end; }
   textarea {
     flex: 1;
@@ -217,7 +219,7 @@
     border: 1px solid var(--border);
     border-radius: 12px;
     padding: 24px;
-    width: 340px;
+    width: min(340px, 100%);
   }
   #auth h2 { margin: 0 0 16px; font-size: 16px; }
   #auth input {
@@ -250,6 +252,7 @@
   #who { font-size: 12px; color: var(--muted); }
   .switch { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--muted); }
   .switch input { width: 14px; height: 14px; accent-color: var(--accent); }
+  .switch[hidden] { display: none; }
   .images { display: flex; gap: 10px; flex-wrap: wrap; margin-top: 10px; }
   .images figure { margin: 0; max-width: 320px; }
   .images img {
@@ -273,6 +276,24 @@
   }
   #lightbox[hidden] { display: none; }
   #lightbox img { max-width: 100%; max-height: 100%; background: #fff; border-radius: 8px; }
+  @media (max-width: 640px) {
+    body { padding-top: 48px; font-size: 14px; }
+    header { padding: 8px 12px; gap: 10px; }
+    header h1 { font-size: 15px; white-space: nowrap; }
+    .badge { display: none; }
+    button { padding: 7px 11px; }
+    #log { padding: 16px 12px 8px; }
+    footer { padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); }
+    #app, #auth { padding-bottom: calc(96px + env(safe-area-inset-bottom)); }
+    #form { gap: 8px; }
+    textarea, #auth input, .rate input { font-size: 16px; }
+    textarea { padding: 10px 12px; }
+    #send { padding: 11px 16px; }
+    .msg { margin-bottom: 18px; }
+    .capabilities { padding: 14px; }
+    .images figure { max-width: 100%; }
+    #lightbox { padding: 12px; }
+  }
 </style>
 </head>
 <body>
@@ -310,7 +331,7 @@
   </form>
   <div class="hint-row">
     <div class="hint">Ответы формируются только по проиндексированной документации. Проверьте источники перед использованием.</div>
-    <label class="switch" title="Показывать найденные в документации изображения под ответом">
+    <label class="switch" id="images-switch" title="Показывать найденные в документации изображения под ответом">
       <input type="checkbox" id="show-images" checked>
       <span>Изображения из документации</span>
     </label>
@@ -339,6 +360,16 @@ let me = { id: null, username: '', role: 'guest' };
 const appEl = document.getElementById('app');
 const authEl = document.getElementById('auth');
 
+function syncLayout() {
+  const header = document.querySelector('header');
+  const footer = document.querySelector('#app footer');
+  if (header) document.body.style.paddingTop = header.offsetHeight + 'px';
+  if (footer && !appEl.hidden) appEl.style.paddingBottom = footer.offsetHeight + 'px';
+}
+window.addEventListener('resize', syncLayout);
+window.addEventListener('orientationchange', syncLayout);
+syncLayout();
+
 async function api(path, options) {
   const res = await fetch(path, Object.assign({ headers: { 'Content-Type': 'application/json' } }, options || {}));
   if (res.status === 401) {
@@ -362,6 +393,7 @@ function showApp(user) {
   document.getElementById('admin-link').hidden = user.role !== 'admin';
   document.getElementById('who').textContent =
     user.username + (user.role === 'admin' ? ' · админ' : '');
+  syncLayout();
   document.getElementById('input').focus();
 }
 
@@ -406,6 +438,8 @@ function bootstrap() {
   loadTitle();
   fetch('/health').then(r => r.json()).then(d => {
     document.getElementById('model').textContent = d.llm_model;
+    document.getElementById('images-switch').hidden = !d.image_search;
+    syncLayout();
   });
   fetch('/collection').then(r => r.json()).then(d => {
     document.getElementById('index').textContent = d.exists ? d.points + ' фрагментов' : 'индекс пуст';

@@ -99,6 +99,46 @@ CREATE TABLE IF NOT EXISTS settings (
     updated_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_corrections_status ON corrections(status);
+CREATE TABLE IF NOT EXISTS request_evals (
+    request_id INTEGER PRIMARY KEY,
+    verdict TEXT NOT NULL DEFAULT 'unknown',
+    score REAL NOT NULL DEFAULT 0,
+    reason TEXT NOT NULL DEFAULT '',
+    method TEXT NOT NULL DEFAULT 'heuristic',
+    suggested_answer TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (request_id) REFERENCES requests(id)
+);
+CREATE INDEX IF NOT EXISTS idx_request_evals_verdict ON request_evals(verdict);
+CREATE TABLE IF NOT EXISTS answer_issues (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    request_id INTEGER NOT NULL,
+    kind TEXT NOT NULL DEFAULT '',
+    detail TEXT NOT NULL DEFAULT '',
+    status TEXT NOT NULL DEFAULT 'open',
+    topic_id INTEGER,
+    lesson_id INTEGER,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_answer_issues_status ON answer_issues(status);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_answer_issues_req_kind ON answer_issues(request_id, kind);
+CREATE TABLE IF NOT EXISTS question_topics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    title TEXT NOT NULL DEFAULT '',
+    representative TEXT NOT NULL DEFAULT '',
+    total INTEGER NOT NULL DEFAULT 0,
+    problematic INTEGER NOT NULL DEFAULT 0,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS topic_requests (
+    topic_id INTEGER NOT NULL,
+    request_id INTEGER NOT NULL,
+    score REAL NOT NULL DEFAULT 0,
+    PRIMARY KEY (topic_id, request_id)
+);
 """
 
 CORRECTION_COLUMNS = ("doc_name", "doc_pages", "doc_ref")
@@ -405,6 +445,7 @@ def create_lesson(
     answer: str,
     focus: str,
     author: str,
+    status: str = "active",
 ) -> dict:
     ensure_schema()
     with _LOCK, connect() as conn:
@@ -412,9 +453,9 @@ def create_lesson(
             """
             INSERT INTO lessons (topic, question, answer, focus, author, status, uses,
                                  created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'active', 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
             """,
-            (topic, question, answer, focus, author, now(), now()),
+            (topic, question, answer, focus, author, status, now(), now()),
         )
         lesson_id = int(cur.lastrowid)
     return get_lesson(lesson_id) or {}
@@ -508,6 +549,29 @@ def list_training_log(limit: int = 30) -> list[dict]:
             (limit,),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def training_lessons_for_correction(correction_id: int) -> list[int]:
+    """Уроки, созданные автообучением из указанного исправления."""
+    ensure_schema()
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT lesson_id FROM training_log
+            WHERE correction_id = ? AND lesson_id IS NOT NULL
+            """,
+            (correction_id,),
+        ).fetchall()
+    return [int(row["lesson_id"]) for row in rows]
+
+
+def delete_training_log_for_correction(correction_id: int) -> int:
+    ensure_schema()
+    with _LOCK, connect() as conn:
+        cur = conn.execute(
+            "DELETE FROM training_log WHERE correction_id = ?", (correction_id,)
+        )
+    return int(cur.rowcount)
 
 
 def get_setting(key: str, default: str = "") -> str:
@@ -798,3 +862,308 @@ def summary() -> dict:
     data = dict(row)
     data.update(check_summary())
     return data
+
+
+def get_request(request_id: int) -> dict | None:
+    ensure_schema()
+    with connect() as conn:
+        row = conn.execute("SELECT * FROM requests WHERE id = ?", (request_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def get_request_full(request_id: int) -> dict | None:
+    ensure_schema()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT r.*, t.vote, t.comment AS rating_comment
+            FROM requests r LEFT JOIN ratings t ON t.request_id = r.id
+            WHERE r.id = ?
+            """,
+            (request_id,),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def recent_requests(limit: int = 500, days: int | None = None) -> list[dict]:
+    ensure_schema()
+    query = """
+        SELECT r.id, r.question, r.answer, r.grounded, r.corrected, r.sources,
+               r.latency_ms, r.origin, r.created_at, t.vote
+        FROM requests r LEFT JOIN ratings t ON t.request_id = r.id
+    """
+    params: list = []
+    if days:
+        query += " WHERE r.created_at >= datetime('now', ?)"
+        params.append(f"-{int(days)} days")
+    query += " ORDER BY r.id DESC LIMIT ?"
+    params.append(limit)
+    with connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def upsert_request_eval(
+    request_id: int,
+    verdict: str,
+    score: float,
+    reason: str,
+    method: str = "heuristic",
+    suggested_answer: str = "",
+) -> None:
+    ensure_schema()
+    with _LOCK, connect() as conn:
+        conn.execute(
+            """
+            INSERT INTO request_evals
+                (request_id, verdict, score, reason, method, suggested_answer, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(request_id) DO UPDATE SET
+                verdict = excluded.verdict,
+                score = excluded.score,
+                reason = excluded.reason,
+                method = excluded.method,
+                suggested_answer = excluded.suggested_answer,
+                updated_at = excluded.updated_at
+            """,
+            (request_id, verdict, float(score), reason[:500], method, suggested_answer, now(), now()),
+        )
+
+
+def get_request_eval(request_id: int) -> dict | None:
+    ensure_schema()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM request_evals WHERE request_id = ?", (request_id,)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_request_evals(
+    limit: int = 100,
+    offset: int = 0,
+    verdict: str | None = None,
+    only_problems: bool = False,
+) -> list[dict]:
+    ensure_schema()
+    query = """
+        SELECT e.request_id, e.verdict, e.score, e.reason, e.method, e.suggested_answer,
+               e.updated_at, r.question, r.answer, r.username, r.grounded,
+               r.created_at AS requested_at, t.vote
+        FROM request_evals e
+        JOIN requests r ON r.id = e.request_id
+        LEFT JOIN ratings t ON t.request_id = r.id
+        WHERE 1 = 1
+    """
+    params: list = []
+    if verdict:
+        query += " AND e.verdict = ?"
+        params.append(verdict)
+    if only_problems:
+        query += " AND e.verdict IN ('partial', 'wrong', 'refused_wrongly')"
+    query += " ORDER BY e.request_id DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+    with connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def eval_summary() -> dict:
+    ensure_schema()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT verdict, COUNT(*) AS n FROM request_evals GROUP BY verdict"
+        ).fetchall()
+    counts = {row["verdict"]: int(row["n"]) for row in rows}
+    total = sum(counts.values())
+    problems = sum(counts.get(key, 0) for key in ("partial", "wrong", "refused_wrongly"))
+    return {"total": total, "problems": problems, "by_verdict": counts}
+
+
+def add_issue(request_id: int, kind: str, detail: str = "") -> int | None:
+    ensure_schema()
+    with _LOCK, connect() as conn:
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO answer_issues
+                    (request_id, kind, detail, status, created_at, updated_at)
+                VALUES (?, ?, ?, 'open', ?, ?)
+                """,
+                (request_id, kind, detail[:500], now(), now()),
+            )
+        except sqlite3.IntegrityError:
+            return None
+        return int(cur.lastrowid)
+
+
+def list_issues(status: str | None = "open", limit: int = 200) -> list[dict]:
+    ensure_schema()
+    query = """
+        SELECT i.id, i.request_id, i.kind, i.detail, i.status, i.lesson_id, i.created_at,
+               r.question, r.answer, r.username, r.created_at AS requested_at, t.vote
+        FROM answer_issues i
+        JOIN requests r ON r.id = i.request_id
+        LEFT JOIN ratings t ON t.request_id = i.request_id
+        WHERE 1 = 1
+    """
+    params: list = []
+    if status:
+        query += " AND i.status = ?"
+        params.append(status)
+    query += " ORDER BY i.id DESC LIMIT ?"
+    params.append(limit)
+    with connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def update_issue(
+    issue_id: int,
+    status: str | None = None,
+    lesson_id: int | None = None,
+    detail: str | None = None,
+) -> None:
+    ensure_schema()
+    fields: list = []
+    params: list = []
+    if status is not None:
+        fields.append("status = ?")
+        params.append(status)
+    if lesson_id is not None:
+        fields.append("lesson_id = ?")
+        params.append(lesson_id)
+    if detail is not None:
+        fields.append("detail = ?")
+        params.append(detail[:500])
+    if not fields:
+        return
+    fields.append("updated_at = ?")
+    params.append(now())
+    params.append(issue_id)
+    with _LOCK, connect() as conn:
+        conn.execute(f"UPDATE answer_issues SET {', '.join(fields)} WHERE id = ?", params)
+
+
+def close_issues(request_id: int, kinds: tuple[str, ...]) -> None:
+    if not kinds:
+        return
+    ensure_schema()
+    placeholders = ", ".join("?" for _ in kinds)
+    with _LOCK, connect() as conn:
+        conn.execute(
+            f"UPDATE answer_issues SET status = 'resolved', updated_at = ? "
+            f"WHERE request_id = ? AND status = 'open' AND kind IN ({placeholders})",
+            (now(), request_id, *kinds),
+        )
+
+
+def problem_request_ids() -> set[int]:
+    ensure_schema()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT request_id FROM request_evals WHERE verdict IN ('partial', 'wrong', 'refused_wrongly')"
+        ).fetchall()
+    return {int(row["request_id"]) for row in rows}
+
+
+def requests_for_llm(limit: int = 20) -> list[int]:
+    """Запросы, ещё не оценённые моделью: сначала проблемные, потом свежие."""
+    ensure_schema()
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT r.id AS request_id,
+                   CASE WHEN e.verdict IN ('partial', 'wrong', 'refused_wrongly') THEN 0 ELSE 1 END AS priority
+            FROM requests r
+            LEFT JOIN request_evals e ON e.request_id = r.id
+            WHERE e.request_id IS NULL OR e.method != 'llm'
+            ORDER BY priority, r.id DESC
+            LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [int(row["request_id"]) for row in rows]
+
+
+def issue_summary() -> dict:
+    ensure_schema()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT status, COUNT(*) AS n FROM answer_issues GROUP BY status"
+        ).fetchall()
+        kinds = conn.execute(
+            "SELECT kind, COUNT(*) AS n FROM answer_issues WHERE status = 'open' GROUP BY kind"
+        ).fetchall()
+    counts = {row["status"]: int(row["n"]) for row in rows}
+    return {
+        "total": sum(counts.values()),
+        "open": counts.get("open", 0),
+        "resolved": counts.get("resolved", 0),
+        "dismissed": counts.get("dismissed", 0),
+        "by_kind": {row["kind"]: int(row["n"]) for row in kinds},
+    }
+
+
+def replace_topics(items: list[dict]) -> int:
+    """Пересобрать ассоциации вопросов: темы и их состав."""
+    ensure_schema()
+    with _LOCK, connect() as conn:
+        conn.execute("UPDATE answer_issues SET topic_id = NULL")
+        conn.execute("DELETE FROM topic_requests")
+        conn.execute("DELETE FROM question_topics")
+        for item in items:
+            cur = conn.execute(
+                """
+                INSERT INTO question_topics
+                    (title, representative, total, problematic, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    item.get("title", "")[:200],
+                    item.get("representative", ""),
+                    int(item.get("total", 0)),
+                    int(item.get("problematic", 0)),
+                    now(),
+                    now(),
+                ),
+            )
+            topic_id = int(cur.lastrowid)
+            for request_id, score in item.get("members", []):
+                conn.execute(
+                    "INSERT OR REPLACE INTO topic_requests (topic_id, request_id, score) VALUES (?, ?, ?)",
+                    (topic_id, int(request_id), float(score)),
+                )
+                conn.execute(
+                    "UPDATE answer_issues SET topic_id = ? WHERE request_id = ?",
+                    (topic_id, int(request_id)),
+                )
+    return len(items)
+
+
+def list_topics(limit: int = 80) -> list[dict]:
+    ensure_schema()
+    with connect() as conn:
+        rows = conn.execute(
+            "SELECT * FROM question_topics ORDER BY problematic DESC, total DESC LIMIT ?",
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def topic_requests(topic_id: int, limit: int = 50) -> list[dict]:
+    ensure_schema()
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT tr.request_id, tr.score, r.question, r.answer, r.created_at,
+                   e.verdict
+            FROM topic_requests tr
+            JOIN requests r ON r.id = tr.request_id
+            LEFT JOIN request_evals e ON e.request_id = tr.request_id
+            WHERE tr.topic_id = ?
+            ORDER BY tr.score DESC LIMIT ?
+            """,
+            (topic_id, limit),
+        ).fetchall()
+    return [dict(row) for row in rows]

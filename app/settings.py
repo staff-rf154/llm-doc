@@ -51,6 +51,7 @@ LESSONS = "Обучение"
 HYBRID = "Гибридный поиск"
 RERANK = "Переранжирование"
 UPLOADS = "Загрузка документов"
+AUTOLEARN = "Автообучение"
 
 PARAMS: list[Param] = [
     Param("LLM_MODEL", "Модель генерации", group=GENERATION,
@@ -150,6 +151,19 @@ PARAMS: list[Param] = [
           hint="Берутся самые крупные изображения документа"),
     Param("IMAGE_SKIP_FULLPAGE", "Доля площади страницы для фоновых картинок", "float", group=IMAGES,
           hint="Картинки крупнее этой доли страницы считаются фоном и пропускаются"),
+    Param("AUTOLEARN_WINDOW", "Запросов в окне анализа", "int", group=AUTOLEARN,
+          hint="Сколько последних запросов пользователей оценивается автоматически"),
+    Param("AUTOLEARN_DAYS", "Окно анализа, дней", "int", group=AUTOLEARN,
+          hint="Ограничить анализ последними днями, 0 — без ограничения по дате"),
+    Param("AUTOLEARN_LLM_ENABLED", "Оценивать ответы моделью", "bool", group=AUTOLEARN,
+          hint="LLM-судья уточняет вердикт и предлагает правильный ответ — точнее, но медленнее"),
+    Param("AUTOLEARN_LLM_LIMIT", "Запросов для LLM-оценки", "int", group=AUTOLEARN,
+          hint="Сколько запросов за один запуск отправлять на LLM-оценку"),
+    Param("AUTOLEARN_TOPIC_THRESHOLD", "Порог схожести вопросов в теме", "float", group=AUTOLEARN,
+          hint="Выше — темы точнее, но их больше. Для e5 обычно 0.82–0.88"),
+    Param("AUTOLEARN_MIN_TOPIC_HITS", "Проблемных вопросов для урока", "int", group=AUTOLEARN,
+          hint="Сколько проблемных обращений в теме нужно, чтобы собрать урок-кандидат"),
+    Param("AUTOLEARN_MAX_TOPICS", "Максимум тем", "int", group=AUTOLEARN),
 ]
 
 CACHE_TTL = 3.0
@@ -336,6 +350,7 @@ def groups() -> list[str]:
         WEBSITES,
         UPLOADS,
         IMAGES,
+        AUTOLEARN,
         INGEST,
     ]
     present = {param.group for param in PARAMS}

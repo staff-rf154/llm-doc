@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 
 import appdb
 import auth
+import autolearn
 import capabilities as capabilities_mod
 import config
 import corrections
@@ -89,7 +90,7 @@ class LessonUpdate(BaseModel):
     question: str | None = None
     answer: str | None = None
     focus: str | None = None
-    status: str | None = Field(default=None, pattern="^(active|disabled)$")
+    status: str | None = Field(default=None, pattern="^(active|disabled|candidate)$")
 
 
 @router.post("/train/chat")
@@ -186,6 +187,73 @@ def training_run(user: dict = Depends(auth.require_admin)) -> dict:
 def check_lessons(q: str, user: dict = Depends(auth.require_admin)) -> dict:
     """Показать, какие уроки сработают на этот вопрос."""
     return {"query": q, "lessons": lessons.relevant(q)}
+
+
+class AutolearnRun(BaseModel):
+    llm: bool | None = None
+
+
+@router.get("/autolearn")
+def autolearn_overview(
+    limit: int = 100,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    """Подробный обзор автообучения: оценки, ошибки, ассоциации, кандидаты."""
+    topics = [
+        {**topic, "members": appdb.topic_requests(topic["id"], limit=8)}
+        for topic in appdb.list_topics()
+    ]
+    return {
+        "summary": autolearn.summary(),
+        "job": autolearn.job.snapshot(),
+        "evals": appdb.list_request_evals(limit=limit),
+        "problems": appdb.list_request_evals(limit=limit, only_problems=True),
+        "issues": appdb.list_issues(status="open", limit=limit),
+        "topics": topics,
+        "candidates": appdb.list_lessons(status="candidate"),
+        "params": [item for item in settings.describe() if item["group"] == settings.AUTOLEARN],
+    }
+
+
+@router.post("/autolearn/run", status_code=202)
+def autolearn_run(
+    payload: AutolearnRun | None = None,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    """Запустить автообучение: эвристики, ассоциации, LLM-оценка, уроки-кандидаты."""
+    return autolearn.job.start(payload.llm if payload else None)
+
+
+@router.post("/autolearn/lessons/{lesson_id}/approve")
+def autolearn_approve(
+    lesson_id: int,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    """Одобрить урок-кандидат: он начнёт подмешиваться в ответы."""
+    if not appdb.get_lesson(lesson_id):
+        raise HTTPException(status_code=404, detail="Урок не найден")
+    appdb.update_lesson(lesson_id, status="active")
+    lessons.reindex()
+    return appdb.get_lesson(lesson_id) or {}
+
+
+@router.post("/autolearn/lessons/{lesson_id}/reject")
+def autolearn_reject(
+    lesson_id: int,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    if not appdb.delete_lesson(lesson_id):
+        raise HTTPException(status_code=404, detail="Урок не найден")
+    return {"ok": True}
+
+
+@router.post("/autolearn/issues/{issue_id}/dismiss")
+def autolearn_dismiss(
+    issue_id: int,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    appdb.update_issue(issue_id, status="dismissed")
+    return {"ok": True}
 
 
 @router.get("/settings")
@@ -571,8 +639,13 @@ def delete_correction(
 ) -> dict:
     if not appdb.get_correction(correction_id):
         raise HTTPException(status_code=404, detail="Исправление не найдено")
+    lesson_ids = appdb.training_lessons_for_correction(correction_id)
     appdb.delete_correction(correction_id)
     corrections.deactivate(correction_id)
+    for lesson_id in lesson_ids:
+        appdb.delete_lesson(lesson_id)
+    appdb.delete_training_log_for_correction(correction_id)
+    lessons.reindex()
     return {"ok": True}
 
 

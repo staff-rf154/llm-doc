@@ -37,6 +37,16 @@ def _history(messages: list[Turn]) -> list[dict]:
     return turns
 
 
+def _autolearn(request_id: int) -> None:
+    """Автоматическая оценка запроса после ответа (без LLM, дёшево)."""
+    try:
+        import autolearn
+
+        autolearn.evaluate_request(request_id)
+    except Exception:
+        pass
+
+
 def _related_images(question: str, allowed: bool = True) -> list[dict]:
     if not allowed or not settings.bool_value("IMAGE_SEARCH_ENABLED", True):
         return []
@@ -179,6 +189,7 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
             int((time.time() - started) * 1000),
             origin="web",
         )
+        _autolearn(request_id)
         yield _sse_event(
             {
                 "type": "sources",

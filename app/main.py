@@ -146,6 +146,7 @@ def health() -> dict:
         "title": app_title(),
         "llm_model": settings.value("LLM_MODEL", config.LLM_MODEL),
         "embedding_model": config.EMBEDDING_MODEL,
+        "image_search": settings.bool_value("IMAGE_SEARCH_ENABLED", config.IMAGE_SEARCH_ENABLED),
     }
 
 
@@ -260,6 +261,12 @@ def ask(
     )
     payload = answer.to_dict()
     payload["request_id"] = request_id
+    try:
+        import autolearn
+
+        autolearn.evaluate_request(request_id)
+    except Exception:
+        pass
     return payload
 
 
@@ -275,6 +282,12 @@ def rate(
     user: dict = Depends(auth.require_user),
 ) -> dict:
     appdb.set_rating(request_id, payload.vote, payload.comment)
+    try:
+        import autolearn
+
+        autolearn.evaluate_request(request_id)
+    except Exception:
+        pass
     return {
         "ok": True,
         "request_id": request_id,

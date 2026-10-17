@@ -189,9 +189,11 @@ def save_lesson(
     answer: str,
     focus: str,
     author: str,
+    status: str = "active",
 ) -> dict:
-    lesson = appdb.create_lesson(topic, question, answer, focus, author)
-    reindex()
+    lesson = appdb.create_lesson(topic, question, answer, focus, author, status=status)
+    if status == "active":
+        reindex()
     return lesson
 
 
