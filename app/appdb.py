@@ -10,6 +10,7 @@ import threading
 from datetime import datetime, timedelta
 
 import config
+import settingsdb
 
 _LOCK = threading.RLock()
 _INIT_DONE = False
@@ -150,15 +151,26 @@ CREATE TABLE IF NOT EXISTS domains (
     categories TEXT NOT NULL DEFAULT '[]',
     terminology TEXT NOT NULL DEFAULT '[]',
     sample_questions TEXT NOT NULL DEFAULT '[]',
+    temperature REAL,
+    allow_inference INTEGER NOT NULL DEFAULT 0,
+    log_analysis INTEGER NOT NULL DEFAULT 0,
     is_builtin INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS doc_exclusions (
+    root TEXT NOT NULL,
+    source TEXT NOT NULL,
+    excluded_at TEXT NOT NULL,
+    PRIMARY KEY (root, source)
 );
 """
 
 CORRECTION_COLUMNS = ("doc_name", "doc_pages", "doc_ref")
 CHECK_COLUMNS = ("check_status", "check_comment", "checked_at", "check_collection")
 REQUEST_COLUMNS = ("doc_name", "doc_pages", "doc_ref", "origin")
+DOMAIN_COLUMNS = ("temperature", "allow_inference", "log_analysis")
 
 CHECK_STATUSES = ("unchecked", "verified", "review")
 
@@ -175,6 +187,17 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 conn.execute(
                     f"ALTER TABLE {table} ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"
                 )
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(domains)")}
+    if "temperature" not in existing:
+        conn.execute("ALTER TABLE domains ADD COLUMN temperature REAL")
+    if "allow_inference" not in existing:
+        conn.execute(
+            "ALTER TABLE domains ADD COLUMN allow_inference INTEGER NOT NULL DEFAULT 0"
+        )
+    if "log_analysis" not in existing:
+        conn.execute(
+            "ALTER TABLE domains ADD COLUMN log_analysis INTEGER NOT NULL DEFAULT 0"
+        )
 
 SESSION_DAYS = 14
 
@@ -590,27 +613,13 @@ def delete_training_log_for_correction(correction_id: int) -> int:
 
 
 def get_setting(key: str, default: str = "") -> str:
-    ensure_schema()
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT value FROM settings WHERE key = ?", (key,)
-        ).fetchone()
-    return row["value"] if row else default
+    """Значение из отдельной БД настроек (settings.db)."""
+    return settingsdb.get(key, default)
 
 
 def set_setting(key: str, value: str) -> str:
-    ensure_schema()
-    with _LOCK, connect() as conn:
-        conn.execute(
-            """
-            INSERT INTO settings (key, value, updated_at)
-            VALUES (?, ?, ?)
-            ON CONFLICT(key) DO UPDATE SET
-                value = excluded.value,
-                updated_at = excluded.updated_at
-            """,
-            (key, value, now()),
-        )
+    """Записать значение в отдельную БД настроек (settings.db)."""
+    settingsdb.set(key, value)
     return value
 
 
@@ -625,6 +634,16 @@ def _decode_domain(row: sqlite3.Row) -> dict:
             item[field] = value if isinstance(value, list) else []
         except json.JSONDecodeError:
             item[field] = []
+    try:
+        item["temperature"] = (
+            float(item["temperature"]) if item.get("temperature") is not None else None
+        )
+    except (TypeError, ValueError):
+        item["temperature"] = None
+    if item["temperature"] is not None and item["temperature"] < 0:
+        item["temperature"] = None
+    item["allow_inference"] = bool(item.get("allow_inference"))
+    item["log_analysis"] = bool(item.get("log_analysis"))
     return item
 
 
@@ -660,6 +679,9 @@ def insert_domain(
     categories: list | None = None,
     terminology: list | None = None,
     sample_questions: list | None = None,
+    temperature: float | None = None,
+    allow_inference: bool = False,
+    log_analysis: bool = False,
     is_builtin: bool = False,
 ) -> dict:
     ensure_schema()
@@ -669,8 +691,9 @@ def insert_domain(
             """
             INSERT INTO domains
                 (slug, title, description, system_prompt, capabilities, categories,
-                 terminology, sample_questions, is_builtin, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 terminology, sample_questions, temperature, allow_inference,
+                 log_analysis, is_builtin, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 slug,
@@ -681,6 +704,9 @@ def insert_domain(
                 json.dumps(categories or [], ensure_ascii=False),
                 json.dumps(terminology or [], ensure_ascii=False),
                 json.dumps(sample_questions or [], ensure_ascii=False),
+                temperature,
+                1 if allow_inference else 0,
+                1 if log_analysis else 0,
                 1 if is_builtin else 0,
                 stamp,
                 stamp,
@@ -694,6 +720,7 @@ def update_domain(slug: str, **fields) -> dict | None:
     allowed = {
         "slug", "title", "description", "system_prompt",
         "capabilities", "categories", "terminology", "sample_questions",
+        "temperature", "allow_inference", "log_analysis",
     }
     sets: list[str] = []
     params: list = []
@@ -702,6 +729,8 @@ def update_domain(slug: str, **fields) -> dict | None:
             continue
         if key in DOMAIN_JSON_FIELDS:
             value = json.dumps(value or [], ensure_ascii=False)
+        elif key in ("allow_inference", "log_analysis"):
+            value = 1 if value else 0
         sets.append(f"{key} = ?")
         params.append(value)
     if not sets:
@@ -719,6 +748,42 @@ def delete_domain(slug: str) -> bool:
     with _LOCK, connect() as conn:
         cur = conn.execute("DELETE FROM domains WHERE slug = ?", (slug,))
         return cur.rowcount > 0
+
+
+def is_excluded(root: str, source: str) -> bool:
+    ensure_schema()
+    with connect() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM doc_exclusions WHERE root = ? AND source = ?",
+            (root, source),
+        ).fetchone()
+    return row is not None
+
+
+def excluded_keys() -> set[tuple[str, str]]:
+    ensure_schema()
+    with connect() as conn:
+        rows = conn.execute("SELECT root, source FROM doc_exclusions").fetchall()
+    return {(row["root"], row["source"]) for row in rows}
+
+
+def add_exclusion(root: str, source: str) -> None:
+    ensure_schema()
+    with _LOCK, connect() as conn:
+        conn.execute(
+            "INSERT OR REPLACE INTO doc_exclusions (root, source, excluded_at) "
+            "VALUES (?, ?, ?)",
+            (root, source, now()),
+        )
+
+
+def remove_exclusion(root: str, source: str) -> None:
+    ensure_schema()
+    with _LOCK, connect() as conn:
+        conn.execute(
+            "DELETE FROM doc_exclusions WHERE root = ? AND source = ?",
+            (root, source),
+        )
 
 
 def correction_ids_by_question() -> dict[str, int]:

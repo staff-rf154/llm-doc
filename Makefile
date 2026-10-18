@@ -1,4 +1,4 @@
-.PHONY: up down build ingest ingest-dry ask evaluate evaluate-ragas logs pull-llm ps clean chm reindex reindex-status reindex-pause reindex-resume prompts synonyms synonyms-expand seed-synonyms
+.PHONY: up down build ingest ingest-dry ask evaluate evaluate-ragas logs pull-llm ps clean chm reindex reindex-status reindex-pause reindex-resume prompts synonyms synonyms-expand seed-synonyms super-test
 
 up:
 	docker compose up -d --build
@@ -63,6 +63,9 @@ evaluate:
 
 evaluate-ragas:
 	docker compose run --rm app python eval/eval.py --ragas
+
+super-test:
+	docker compose exec -T app python eval/super_test.py $(ARGS)
 
 clean:
 	docker compose down -v

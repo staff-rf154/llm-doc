@@ -158,8 +158,9 @@ def health() -> dict:
         "collection": config.QDRANT_COLLECTION,
         "title": app_title(),
         "llm_model": settings.value("LLM_MODEL", config.LLM_MODEL),
-        "embedding_model": config.EMBEDDING_MODEL,
+        "embedding_model": settings.value("EMBEDDING_MODEL", config.EMBEDDING_MODEL),
         "image_search": settings.bool_value("IMAGE_SEARCH_ENABLED", config.IMAGE_SEARCH_ENABLED),
+        "device": vectorstore.device_info(),
     }
 
 

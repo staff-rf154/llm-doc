@@ -20,6 +20,7 @@ import evaluation
 import images
 import ingest
 import lessons
+import models
 import questiongen
 import settings
 import synonymdb
@@ -416,27 +417,107 @@ def update_params(
     user: dict = Depends(auth.require_admin),
 ) -> dict:
     try:
-        reindex = settings.save(payload.values)
+        result = settings.save(payload.values)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+    reindex = result["reindex"]
+    warnings = result["warnings"]
+    detail = ""
+    if reindex:
+        detail = "Изменения применены, но требуют переиндексации: " + ", ".join(reindex)
+    elif warnings:
+        detail = "Проверьте настройки: " + "; ".join(warnings)
     return {
         "ok": True,
         "items": settings.describe(),
         "requires_reindex": reindex,
-        "detail": (
-            "Изменения применены, но требуют переиндексации: " + ", ".join(reindex)
-            if reindex
-            else ""
-        ),
+        "warnings": warnings,
+        "detail": detail,
     }
 
 
 @router.post("/settings/params/{key}/reset")
 def reset_param(key: str, user: dict = Depends(auth.require_admin)) -> dict:
-    if key not in {param.key for param in settings.PARAMS}:
+    param = next((item for item in settings.PARAMS if item.key == key), None)
+    if param is None:
         raise HTTPException(status_code=404, detail="Неизвестный параметр")
+    if not param.editable:
+        raise HTTPException(status_code=400, detail="Параметр доступен только для чтения")
     settings.reset(key)
     return {"ok": True, "items": settings.describe()}
+
+
+class ModelName(BaseModel):
+    name: str = Field(min_length=1)
+
+
+class ModelKind(BaseModel):
+    kind: str = Field(pattern="^(embedding|reranker|sparse)$")
+    name: str = Field(min_length=1)
+
+
+@router.get("/models")
+def models_state(user: dict = Depends(auth.require_admin)) -> dict:
+    return models.summary()
+
+
+@router.post("/models/ollama/pull", status_code=202)
+def models_pull(payload: ModelName, user: dict = Depends(auth.require_admin)) -> dict:
+    return models.job.start(payload.name)
+
+
+@router.get("/models/ollama/pull")
+def models_pull_state(user: dict = Depends(auth.require_admin)) -> dict:
+    return models.job.snapshot()
+
+
+@router.delete("/models/ollama")
+def models_ollama_delete(name: str, user: dict = Depends(auth.require_admin)) -> dict:
+    try:
+        return models.ollama_delete(name)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Ollama недоступна: {exc}") from exc
+
+
+@router.post("/models/ollama/unload")
+def models_ollama_unload(payload: ModelName, user: dict = Depends(auth.require_admin)) -> dict:
+    try:
+        return models.ollama_unload(payload.name)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Ollama недоступна: {exc}") from exc
+
+
+@router.post("/models/ollama/select")
+def models_ollama_select(payload: ModelName, user: dict = Depends(auth.require_admin)) -> dict:
+    return models.ollama_select(payload.name)
+
+
+@router.post("/models/hf/download", status_code=202)
+def models_hf_download(payload: ModelKind, user: dict = Depends(auth.require_admin)) -> dict:
+    try:
+        return models.hf_download(payload.kind, payload.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Не удалось скачать модель: {exc}") from exc
+
+
+@router.post("/models/hf/select")
+def models_hf_select(payload: ModelKind, user: dict = Depends(auth.require_admin)) -> dict:
+    try:
+        return models.hf_select(payload.kind, payload.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/models/hf")
+def models_hf_delete(
+    name: str, kind: str = "", user: dict = Depends(auth.require_admin)
+) -> dict:
+    try:
+        return models.hf_delete(kind, name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _available_llm_models() -> list[str]:
@@ -604,14 +685,30 @@ def eval_start(
 
 
 @router.get("/docs")
-def docs_list(user: dict = Depends(auth.require_admin)) -> dict:
-    """Файлы документации и их состояние в индексе."""
+def docs_list(
+    offset: int = 0,
+    limit: int = 20,
+    q: str = "",
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    """Файлы документации и их состояние в индексе (с постраничным выводом)."""
     items = docs_mod.list_documents()
+    offset = max(0, offset)
+    limit = max(1, min(limit, 200))
+    needle = (q or "").strip().lower()
+    if needle:
+        items = [item for item in items if needle in item["name"].lower()]
+    total = len(items)
+    indexed_all = len([item for item in items if item["indexed"]])
+    uploaded_all = len([item for item in items if item["editable"]])
     return {
-        "items": items,
-        "total": len(items),
-        "uploaded": len([item for item in items if item["editable"]]),
-        "indexed": len([item for item in items if item["indexed"]]),
+        "items": items[offset:offset + limit],
+        "total": total,
+        "offset": offset,
+        "limit": limit,
+        "query": q,
+        "indexed": indexed_all,
+        "uploaded": uploaded_all,
         "max_mb": settings.int_value("UPLOAD_MAX_MB") or config.UPLOAD_MAX_MB,
         "formats": list(docs_mod.FILE_EXTENSIONS),
     }
@@ -669,17 +766,37 @@ def docs_index(name: str, user: dict = Depends(auth.require_admin)) -> dict:
 
 
 @router.delete("/docs/{name:path}")
-def docs_delete(name: str, user: dict = Depends(auth.require_admin)) -> dict:
-    """Удалить загруженный документ и убрать его из индекса."""
+def docs_delete(
+    name: str,
+    root: str = "",
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    """Удалить документ: из загрузок — с диска, из документации — из индекса."""
     if Path(docs_mod.safe_name(name)).suffix.lower() not in docs_mod.FILE_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Можно удалять только загруженные файлы")
+        raise HTTPException(status_code=400, detail="Формат файла не поддерживается")
     try:
-        result = docs_mod.delete_document(name)
+        result = docs_mod.delete_document(name, root or None)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if not result["removed_file"] and not result["purged_points"]:
+    if not result["removed_file"] and not result["purged_points"] and not result["excluded"]:
         raise HTTPException(status_code=404, detail="Документ не найден")
     return result
+
+
+class DocRestore(BaseModel):
+    name: str = Field(min_length=1)
+    root: str = Field(min_length=1)
+
+
+@router.post("/docs/restore", status_code=202)
+def docs_restore(payload: DocRestore, user: dict = Depends(auth.require_admin)) -> dict:
+    """Вернуть исключённый документ в индекс."""
+    try:
+        return docs_mod.restore_document(payload.name, payload.root)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/documents/pages")
@@ -966,6 +1083,9 @@ class DomainCreate(BaseModel):
     categories: list[str] | None = None
     terminology: list[str] | None = None
     sample_questions: list[str] | None = None
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    allow_inference: bool | None = None
+    log_analysis: bool | None = None
 
 
 class DomainUpdate(BaseModel):
@@ -977,6 +1097,9 @@ class DomainUpdate(BaseModel):
     categories: list[str] | None = None
     terminology: list[str] | None = None
     sample_questions: list[str] | None = None
+    temperature: float | None = Field(default=None, ge=0, le=2)
+    allow_inference: bool | None = None
+    log_analysis: bool | None = None
 
 
 def _domain_catalog() -> dict:
@@ -1036,7 +1159,7 @@ def update_domain(
     user: dict = Depends(auth.require_admin),
 ) -> dict:
     try:
-        return domains.update(slug, payload.model_dump(exclude_none=True))
+        return domains.update(slug, payload.model_dump(exclude_unset=True))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

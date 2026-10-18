@@ -70,6 +70,18 @@
     margin-bottom: 16px;
   }
   .card h2 { font-size: 14px; margin: 0 0 12px; font-weight: 600; }
+  .card.collapsible { padding: 0; }
+  .card.collapsible > summary {
+    list-style: none; cursor: pointer; padding: 16px 18px;
+    display: flex; align-items: center; gap: 8px;
+  }
+  .card.collapsible > summary::-webkit-details-marker { display: none; }
+  .card.collapsible > summary h2 { margin: 0; }
+  .card.collapsible > summary::after {
+    content: '▸'; margin-left: auto; color: var(--muted); transition: transform .15s;
+  }
+  .card.collapsible[open] > summary::after { content: '▾'; }
+  .card.collapsible > .card-body { padding: 0 18px 16px; }
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
   th { color: var(--muted); font-weight: 500; font-size: 12px; }
@@ -168,6 +180,7 @@
     <button data-tab="train">Обучение</button>
     <button data-tab="autolearn">Автообучение</button>
     <button data-tab="settings">Настройки</button>
+    <button data-tab="models">Модели</button>
     <button data-tab="domains">Сфера деятельности</button>
     <button data-tab="docs">Документация</button>
     <button data-tab="index">Индексация</button>
@@ -377,76 +390,6 @@
     </div>
 
     <div class="card">
-      <h2>Ход анализа</h2>
-      <div class="muted" style="margin-bottom:10px">
-        Что сделано за последний прогон и на что обратить внимание. «Закрыто уроком или
-        исправлением» — сколько проблемных запросов уже покрыто материалом обучения.
-      </div>
-      <div id="al-process"></div>
-    </div>
-
-    <div class="card">
-      <h2>Ассоциации: темы вопросов</h2>
-      <div class="muted" style="margin-bottom:10px">
-        Похожие вопросы пользователей, сгруппированные по смыслу. Нажмите на тему, чтобы
-        увидеть входящие вопросы. «Проблемных» — сколько из них получили низкую оценку.
-      </div>
-      <div id="al-topics"></div>
-    </div>
-
-    <div class="card">
-      <h2>Обнаруженные ошибки</h2>
-      <div class="muted" style="margin-bottom:10px">
-        Запросы с признаками проблемы: дизлайк, отказ при наличии документации,
-        ответ без источников или низкий вердикт модели. Показано, что именно не так
-        и чем это уже закрыто.
-      </div>
-      <div id="al-issues"></div>
-      <div class="row" id="al-issues-pager"></div>
-    </div>
-
-    <div class="card">
-      <h2>Уроки-кандидаты</h2>
-      <div class="muted" style="margin-bottom:10px">
-        Собраны из проблемных тем. Проверьте текст и одобрите — только после этого урок
-        начнёт применяться в ответах всем пользователям.
-      </div>
-      <div id="al-candidates"></div>
-    </div>
-
-    <div class="card">
-      <h2>Оценки запросов</h2>
-      <div class="muted" style="margin-bottom:10px">
-        Вердикты по последним запросам с постраничным просмотром. Нажмите «Детали»,
-        чтобы увидеть обоснование, предложенный правильный ответ и чем запрос закрыт.
-      </div>
-      <div class="row">
-        <label class="muted">Фильтр</label>
-        <select id="al-eval-filter">
-          <option value="">все</option>
-          <option value="ok">корректные</option>
-          <option value="partial">неполные</option>
-          <option value="wrong">ошибочные</option>
-          <option value="refused_wrongly">напрасно отказал</option>
-          <option value="refused">отказы</option>
-          <option value="problem">только проблемные</option>
-        </select>
-        <label class="muted">На странице</label>
-        <select id="al-eval-size">
-          <option value="10">10</option>
-          <option value="20" selected>20</option>
-          <option value="50">50</option>
-        </select>
-        <span class="muted" id="al-eval-total"></span>
-      </div>
-      <table id="al-evals-table">
-        <thead><tr><th>#</th><th>Вопрос</th><th>Вердикт</th><th>Метод</th><th>Оценка</th><th>Обстановка</th><th></th></tr></thead>
-        <tbody></tbody>
-      </table>
-      <div class="row" id="al-evals-pager"></div>
-    </div>
-
-    <div class="card">
       <h2>Первичное обучение по сфере</h2>
       <div class="muted" style="margin-bottom:10px">
         Запускается автоматически после загрузки документов при выбранной сфере: прогоняет
@@ -498,13 +441,93 @@
     </div>
 
     <div class="card">
-      <h2>Параметры автообучения</h2>
-      <div id="al-params"></div>
-      <div class="row">
-        <button class="primary" id="al-params-save">Сохранить параметры</button>
-        <span class="muted" id="al-params-msg"></span>
+      <h2>Уроки-кандидаты</h2>
+      <div class="muted" style="margin-bottom:10px">
+        Собраны из проблемных тем. Проверьте текст и одобрите — только после этого урок
+        начнёт применяться в ответах всем пользователям.
       </div>
+      <div id="al-candidates"></div>
     </div>
+
+    <details class="card collapsible">
+      <summary><h2>Параметры автообучения</h2></summary>
+      <div class="card-body">
+        <div id="al-params"></div>
+        <div class="row">
+          <button class="primary" id="al-params-save">Сохранить параметры</button>
+          <span class="muted" id="al-params-msg"></span>
+        </div>
+      </div>
+    </details>
+
+    <details class="card collapsible">
+      <summary><h2>Обнаруженные ошибки</h2></summary>
+      <div class="card-body">
+        <div class="muted" style="margin-bottom:10px">
+          Запросы с признаками проблемы: дизлайк, отказ при наличии документации,
+          ответ без источников или низкий вердикт модели. Показано, что именно не так
+          и чем это уже закрыто.
+        </div>
+        <div id="al-issues"></div>
+        <div class="row" id="al-issues-pager"></div>
+      </div>
+    </details>
+
+    <details class="card collapsible">
+      <summary><h2>Ассоциации: темы вопросов</h2></summary>
+      <div class="card-body">
+        <div class="muted" style="margin-bottom:10px">
+          Похожие вопросы пользователей, сгруппированные по смыслу. Нажмите на тему, чтобы
+          увидеть входящие вопросы. «Проблемных» — сколько из них получили низкую оценку.
+        </div>
+        <div id="al-topics"></div>
+      </div>
+    </details>
+
+    <details class="card collapsible">
+      <summary><h2>Оценки запросов</h2></summary>
+      <div class="card-body">
+        <div class="muted" style="margin-bottom:10px">
+          Вердикты по последним запросам с постраничным просмотром. Нажмите «Детали»,
+          чтобы увидеть обоснование, предложенный правильный ответ и чем запрос закрыт.
+        </div>
+        <div class="row">
+          <label class="muted">Фильтр</label>
+          <select id="al-eval-filter">
+            <option value="">все</option>
+            <option value="ok">корректные</option>
+            <option value="partial">неполные</option>
+            <option value="wrong">ошибочные</option>
+            <option value="refused_wrongly">напрасно отказал</option>
+            <option value="refused">отказы</option>
+            <option value="problem">только проблемные</option>
+          </select>
+          <label class="muted">На странице</label>
+          <select id="al-eval-size">
+            <option value="10">10</option>
+            <option value="20" selected>20</option>
+            <option value="50">50</option>
+          </select>
+          <span class="muted" id="al-eval-total"></span>
+        </div>
+        <table id="al-evals-table">
+          <thead><tr><th>#</th><th>Вопрос</th><th>Вердикт</th><th>Метод</th><th>Оценка</th><th>Обстановка</th><th></th></tr></thead>
+          <tbody></tbody>
+        </table>
+        <div class="row" id="al-evals-pager"></div>
+      </div>
+    </details>
+
+    <details class="card collapsible">
+      <summary><h2>Ход анализа</h2></summary>
+      <div class="card-body">
+        <div class="muted" style="margin-bottom:10px">
+          Что сделано за последний прогон и на что обратить внимание. «Закрыто уроком или
+          исправлением» — сколько проблемных запросов уже покрыто материалом обучения.
+        </div>
+        <div id="al-process"></div>
+      </div>
+    </details>
   </section>
 
   <section id="tab-settings" class="tab hidden">
@@ -635,7 +658,9 @@
       <div class="muted" style="margin-bottom:10px">
         Файлы из data/docs и data/extracted. Свои документы можно загрузить с компьютера
         или скачать по прямой ссылке — они попадают в папку data/uploads и сразу
-        индексируются. Удаление убирает файл и его фрагменты из индекса.
+        индексируются. Удаление загруженного файла убирает его с диска и из индекса;
+        документ из data/docs удалить с диска нельзя (каталог только для чтения), но
+        его можно исключить из индекса и позже вернуть.
       </div>
       <div class="row">
         <input type="file" id="doc-file" style="max-width:340px">
@@ -652,6 +677,45 @@
       </div>
       <table id="doc-table">
         <thead><tr><th>Документ</th><th>Формат</th><th>Размер</th><th>Фрагментов</th><th>Изменён</th><th>Источник</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="row" id="doc-pager" style="margin-top:8px"></div>
+    </div>
+  </section>
+
+  <section id="tab-models" class="tab hidden">
+    <div class="card">
+      <h2>Модель генерации (Ollama)</h2>
+      <div class="muted" id="mdl-device" style="margin-bottom:8px"></div>
+      <div class="row">
+        <input id="mdl-pull-name" placeholder="Имя модели, например qwen2.5:7b-instruct" style="max-width:420px">
+        <button class="primary" id="mdl-pull">Скачать</button>
+        <span class="muted" id="mdl-msg"></span>
+      </div>
+      <div class="row" id="mdl-pull-progress" style="display:none">
+        <progress id="mdl-progress" value="0" max="100" style="width:320px"></progress>
+        <span class="muted" id="mdl-progress-text"></span>
+      </div>
+      <table id="mdl-table">
+        <thead><tr><th>Модель</th><th>Параметры</th><th>Размер</th><th>Изменена</th><th>Статус</th><th></th></tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="card">
+      <h2>Модели поиска (Hugging Face)</h2>
+      <div class="muted" id="mdl-hf-dir" style="margin-bottom:8px"></div>
+      <div class="row">
+        <select id="mdl-hf-kind">
+          <option value="embedding">Модель эмбеддингов</option>
+          <option value="reranker">Reranker</option>
+          <option value="sparse">BM25 (sparse)</option>
+        </select>
+        <input id="mdl-hf-name" placeholder="Репо Hugging Face, например intfloat/multilingual-e5-base" style="max-width:420px">
+        <button class="primary" id="mdl-hf-download">Скачать и выбрать</button>
+      </div>
+      <div class="muted" id="mdl-hf-msg" style="margin-top:6px"></div>
+      <table id="mdl-hf-table">
+        <thead><tr><th>Модель в кэше</th><th></th></tr></thead>
         <tbody></tbody>
       </table>
     </div>
@@ -745,6 +809,7 @@ function loadTab(tab) {
   if (tab === 'autolearn') { loadAutolearn(); loadQuestionGen(); loadBootstrap(); }
   if (tab === 'settings') { loadSettings(); loadCapabilities(); loadDomain(); loadImages(); loadEval(); }
   if (tab === 'domains') loadDomains();
+  if (tab === 'models') loadModels();
   if (tab === 'index') { loadIndex(); loadSites(); }
   if (tab === 'docs') loadDocs();
 }
@@ -1833,6 +1898,7 @@ function renderDomainInfo(data) {
     ? 'Системная инструкция задана (' + profile.system_prompt.length + ' символов)'
     : 'Системная инструкция: общая из настроек');
   if ((profile.categories || []).length) parts.push('Категории: ' + profile.categories.join(', '));
+  parts.push('Разбор логов: ' + (profile.log_analysis ? 'включён' : 'выключен'));
   if ((profile.terminology || []).length) parts.push('Термины: ' + profile.terminology.join(', '));
   if ((profile.sample_questions || []).length) parts.push('Примеры вопросов: ' + profile.sample_questions.join('; '));
   document.getElementById('domain-extra').textContent = parts.join(' · ');
@@ -1899,6 +1965,17 @@ function renderDomEditor(item) {
     field('Слаг (латиницей, необязательно)', 'dom-slug', value.slug || ''),
     field('Описание', 'dom-description', value.description || ''),
     area('Системная инструкция поведения модели', 'dom-prompt', value.system_prompt || '', 8),
+    el('div', { className: 'row' }, [
+      field('Температура генерации (пусто — общая)', 'dom-temperature', value.temperature != null ? String(value.temperature) : ''),
+      el('label', { className: 'muted' }, [
+        el('input', { id: 'dom-inference', type: 'checkbox', checked: !!value.allow_inference }),
+        el('span', { textContent: ' Разрешить небольшой домысел (додумывать в рамках фрагментов)' })
+      ]),
+      el('label', { className: 'muted' }, [
+        el('input', { id: 'dom-logs', type: 'checkbox', checked: !!value.log_analysis }),
+        el('span', { textContent: ' Разбор логов по пути из вопроса (папка /data/logs)' })
+      ])
+    ]),
     area('Что я умею (строка без «-» — раздел, строки с «- » — пункты)', 'dom-caps', formatCaps(value.capabilities || []), 8),
     area('Категории вопросов (по одной в строке)', 'dom-cats', (value.categories || []).join('\n'), 4),
     area('Терминология (по одному в строке)', 'dom-terms', (value.terminology || []).join('\n'), 4),
@@ -1970,7 +2047,11 @@ function readDomainForm() {
     capabilities: parseCaps(document.getElementById('dom-caps').value),
     categories: splitLines(document.getElementById('dom-cats').value),
     terminology: splitLines(document.getElementById('dom-terms').value),
-    sample_questions: splitLines(document.getElementById('dom-questions').value)
+    sample_questions: splitLines(document.getElementById('dom-questions').value),
+    temperature: document.getElementById('dom-temperature').value.trim() === ''
+      ? null : Number(document.getElementById('dom-temperature').value),
+    allow_inference: document.getElementById('dom-inference').checked,
+    log_analysis: document.getElementById('dom-logs').checked
   };
 }
 
@@ -2036,6 +2117,11 @@ function renderParams(items, groups) {
   });
 }
 
+function shortText(text, limit) {
+  const value = String(text == null ? '' : text);
+  return value.length > limit ? value.slice(0, limit) + '…' : value;
+}
+
 function paramRow(item) {
   const inputId = 'param-' + item.key;
   let input;
@@ -2056,7 +2142,10 @@ function paramRow(item) {
       input.value = item.value;
     }
   } else if (item.type === 'prompt') {
-    input = el('textarea', { id: inputId, style: 'min-height:150px' });
+    input = el('textarea', {
+      id: inputId,
+      style: 'width:100%;box-sizing:border-box;min-height:260px;font-family:inherit;line-height:1.45'
+    });
     input.value = item.value;
   } else if (item.type === 'bool') {
     input = el('select', { id: inputId });
@@ -2076,24 +2165,36 @@ function paramRow(item) {
 
   const label = el('label', {
     for: inputId,
-    style: 'min-width:260px;font-weight:500'
+    style: 'font-weight:500'
   }, [
     document.createTextNode(item.label),
     item.requires_reindex ? el('span', { className: 'pill down', textContent: 'требует переиндексации' }) : document.createTextNode(''),
-    item.overridden ? el('span', { className: 'pill', textContent: 'из кабинета' }) : document.createTextNode('')
+    item.overridden ? el('span', { className: 'pill', textContent: 'из кабинета' }) : document.createTextNode(''),
+    item.editable === false ? el('span', { className: 'pill', textContent: 'только чтение' }) : document.createTextNode('')
   ]);
+
+  if (item.editable === false) input.disabled = true;
 
   const hint = el('div', { className: 'muted' }, [
-    document.createTextNode((item.hint ? item.hint + ' · ' : '') + 'по умолчанию: ' + item.default)
+    document.createTextNode(
+      (item.hint ? item.hint + ' · ' : '') + 'по умолчанию: '
+      + shortText(item.default, item.type === 'prompt' ? 240 : 400)
+    )
   ]);
 
-  const reset = el('button', {
+  const reset = item.editable === false ? document.createTextNode('') : el('button', {
     textContent: 'Сбросить',
     onclick: async () => {
       await j('/api/admin/settings/params/' + encodeURIComponent(item.key) + '/reset', { method: 'POST' });
       loadSettings();
     }
   });
+
+  if (item.type === 'prompt') {
+    return el('div', { style: 'display:flex;flex-direction:column;gap:6px;margin-bottom:16px' }, [
+      label, hint, input, el('div', {}, [reset])
+    ]);
+  }
 
   return el('div', { className: 'row', style: 'align-items:flex-start' }, [
     el('div', { style: 'min-width:260px' }, [label, hint]),
@@ -2106,13 +2207,12 @@ document.getElementById('set-params-save').addEventListener('click', async () =>
   const msg = document.getElementById('set-params-msg');
   const values = {};
   document.querySelectorAll('#set-params [id^="param-"]').forEach(node => {
+    if (node.disabled) return;
     values[node.id.replace('param-', '')] = node.value;
   });
   try {
     const res = await j('/api/admin/settings/params', { method: 'PATCH', body: JSON.stringify({ values }) });
-    msg.textContent = res.requires_reindex && res.requires_reindex.length
-      ? 'Сохранено. ' + res.detail
-      : 'Сохранено';
+    msg.textContent = res.detail || 'Сохранено';
     loadSettings();
   } catch (err) { msg.textContent = err.message; }
 });
@@ -2263,56 +2363,193 @@ function formatSize(bytes) {
   return (bytes / 1048576).toFixed(1) + ' МБ';
 }
 
+let docPage = 1;
+let docLimit = 20;
+
 async function loadDocs() {
-  const data = await j('/api/admin/docs');
-  const query = document.getElementById('doc-search').value.trim().toLowerCase();
-  const items = (data.items || []).filter(item => !query || item.name.toLowerCase().includes(query));
+  const query = document.getElementById('doc-search').value.trim();
+  const data = await j('/api/admin/docs?limit=' + docLimit + '&offset=' + ((docPage - 1) * docLimit)
+    + '&q=' + encodeURIComponent(query));
+  const items = data.items || [];
   document.getElementById('doc-count').textContent =
-    'документов: ' + data.total + ', в индексе: ' + data.indexed + ', загружено: ' + data.uploaded
-    + (query ? ', найдено: ' + items.length : '');
+    'документов: ' + data.total + ', в индексе: ' + data.indexed + ', загружено: ' + data.uploaded;
   const body = document.querySelector('#doc-table tbody');
   while (body.firstChild) body.removeChild(body.firstChild);
+  if (!items.length) {
+    body.appendChild(el('tr', {}, [el('td', { colSpan: 7, className: 'muted', textContent: 'Ничего не найдено.' })]));
+  }
   items.forEach(item => {
     const actions = [
       el('button', {
-        textContent: 'Переиндексировать',
+        textContent: item.excluded ? 'Вернуть в индекс' : 'Переиндексировать',
         onclick: async () => {
           const msg = document.getElementById('doc-msg');
           msg.textContent = 'Индексирую ' + item.name + '…';
           try {
-            const saved = await j('/api/admin/docs/' + encodeURIComponent(item.name) + '/index', { method: 'POST' });
-            msg.textContent = 'Готово: ' + saved.chunks + ' фрагментов';
+            let saved;
+            if (item.editable) {
+              saved = await j('/api/admin/docs/' + encodeURIComponent(item.name) + '/index', { method: 'POST' });
+            } else {
+              saved = await j('/api/admin/docs/restore', {
+                method: 'POST',
+                body: JSON.stringify({ name: item.name, root: item.root })
+              });
+            }
+            msg.textContent = 'Готово: ' + (saved.chunks != null ? saved.chunks + ' фрагментов' : item.name);
             loadDocs();
           } catch (err) { msg.textContent = err.message; }
         }
       })
     ];
-    if (item.editable) {
-      actions.push(el('button', {
-        className: 'danger',
-        textContent: 'Удалить',
-        onclick: async () => {
-          if (!confirm('Удалить документ ' + item.name + ' и его фрагменты из индекса?')) return;
-          const msg = document.getElementById('doc-msg');
-          try {
-            await j('/api/admin/docs/' + encodeURIComponent(item.name), { method: 'DELETE' });
-            msg.textContent = 'Удалено: ' + item.name;
-            loadDocs();
-          } catch (err) { msg.textContent = err.message; }
-        }
-      }));
-    }
+    actions.push(el('button', {
+      className: 'danger',
+      textContent: 'Удалить',
+      onclick: async () => {
+        const what = item.editable
+          ? 'Удалить файл ' + item.name + ' и его фрагменты из индекса?'
+          : 'Исключить ' + item.name + ' из индекса? Файл в data/docs остаётся на диске.';
+        if (!confirm(what)) return;
+        const msg = document.getElementById('doc-msg');
+        try {
+          await j('/api/admin/docs/' + encodeURIComponent(item.name) + '?root=' + encodeURIComponent(item.root),
+            { method: 'DELETE' });
+          msg.textContent = item.editable ? 'Удалено: ' + item.name : 'Исключено из индекса: ' + item.name;
+          loadDocs();
+        } catch (err) { msg.textContent = err.message; }
+      }
+    }));
     body.appendChild(el('tr', {}, [
       el('td', { textContent: item.name }),
       el('td', { textContent: item.format }),
       el('td', { textContent: formatSize(item.size) }),
-      el('td', { textContent: item.indexed ? String(item.chunks) : 'не в индексе' }),
+      el('td', { textContent: item.excluded ? 'исключён' : (item.indexed ? String(item.chunks) : 'не в индексе') }),
       el('td', { textContent: item.modified }),
       el('td', { textContent: item.editable ? 'загружен' : 'документация' }),
       el('td', {}, actions)
     ]));
   });
+  renderDocsPager(data.total);
 }
+
+function renderDocsPager(total) {
+  const pager = document.getElementById('doc-pager');
+  while (pager.firstChild) pager.removeChild(pager.firstChild);
+  const pages = Math.max(1, Math.ceil(total / docLimit));
+  if (docPage > pages) docPage = pages;
+  pager.appendChild(el('button', { textContent: 'Назад', disabled: docPage === 1,
+    onclick: () => { docPage -= 1; loadDocs(); } }));
+  pager.appendChild(el('span', { className: 'muted', textContent: 'Страница ' + docPage + ' из ' + pages + ' (всего ' + total + ')' }));
+  pager.appendChild(el('button', { textContent: 'Вперёд', disabled: docPage === pages,
+    onclick: () => { docPage += 1; loadDocs(); } }));
+}
+
+let modelTimer = null;
+
+async function loadModels() {
+  const data = await j('/api/admin/models');
+  const dev = data.device || {};
+  document.getElementById('mdl-device').textContent =
+    'Torch ' + (dev.torch || '—') + ' · CUDA: ' + (dev.cuda ? 'да' + (dev.gpu ? ', ' + dev.gpu : '') + (dev.cuda_version ? ' (' + dev.cuda_version + ')' : '') : 'нет')
+    + ' · эмбеддинги: ' + (dev.embedder || '—') + ' · reranker: ' + (dev.reranker || '—');
+  const active = data.llm_model;
+  const running = new Set((data.running || []).map(r => r.name));
+  const body = document.querySelector('#mdl-table tbody');
+  while (body.firstChild) body.removeChild(body.firstChild);
+  const ollama = data.ollama || {};
+  if (!ollama.available) {
+    body.appendChild(el('tr', {}, [el('td', { colSpan: 6, className: 'muted', textContent: 'Ollama недоступна: ' + (ollama.error || '') })]));
+  }
+  (ollama.models || []).forEach(m => {
+    const isActive = m.name === active;
+    const actions = [];
+    if (!isActive) actions.push(el('button', { textContent: 'Выбрать', onclick: () => selectOllama(m.name) }));
+    if (running.has(m.name)) actions.push(el('button', { textContent: 'Выгрузить', onclick: () => unloadOllama(m.name) }));
+    if (!isActive) actions.push(el('button', { className: 'danger', textContent: 'Удалить', onclick: () => deleteOllama(m.name) }));
+    body.appendChild(el('tr', {}, [
+      el('td', { textContent: m.name }),
+      el('td', { textContent: ((m.params || '') + ' ' + (m.quant || '')).trim() }),
+      el('td', { textContent: formatSize(m.size) }),
+      el('td', { textContent: (m.modified_at || '').slice(0, 16).replace('T', ' ') }),
+      el('td', { textContent: isActive ? 'активна' : (running.has(m.name) ? 'в памяти' : '') }),
+      el('td', {}, actions)
+    ]));
+  });
+  const hf = data.hf || {};
+  const hfActive = hf.active || {};
+  document.getElementById('mdl-hf-dir').textContent =
+    'Кэш: ' + (hf.cache_dir || '—') + ' · активные: эмбеддинги ' + (hfActive.embedding || '—')
+    + ', reranker ' + (hfActive.reranker || '—') + ', BM25 ' + (hfActive.sparse || '—');
+  const hbody = document.querySelector('#mdl-hf-table tbody');
+  while (hbody.firstChild) hbody.removeChild(hbody.firstChild);
+  (hf.downloaded || []).forEach(name => {
+    hbody.appendChild(el('tr', {}, [
+      el('td', { textContent: name }),
+      el('td', {}, [el('button', { className: 'danger', textContent: 'Удалить из кэша', onclick: () => deleteHf(name) })])
+    ]));
+  });
+  const pull = data.pull || {};
+  const progress = document.getElementById('mdl-pull-progress');
+  if (pull.status === 'running') {
+    progress.style.display = '';
+    document.getElementById('mdl-progress').value = pull.percent || 0;
+    document.getElementById('mdl-progress-text').textContent =
+      pull.model + ': ' + (pull.status_text || 'загрузка') + ' — ' + (pull.percent || 0) + '%';
+    if (!modelTimer) modelTimer = setInterval(loadModels, 3000);
+  } else {
+    if (modelTimer) { clearInterval(modelTimer); modelTimer = null; }
+    progress.style.display = pull.status === 'idle' ? 'none' : '';
+    if (pull.status === 'error') document.getElementById('mdl-progress-text').textContent = 'Ошибка: ' + pull.error;
+    else if (pull.status === 'done') document.getElementById('mdl-progress-text').textContent = 'Готово: ' + pull.model;
+  }
+}
+
+async function selectOllama(name) {
+  try { await j('/api/admin/models/ollama/select', { method: 'POST', body: JSON.stringify({ name }) });
+    document.getElementById('mdl-msg').textContent = 'Активная модель: ' + name; loadModels();
+  } catch (err) { document.getElementById('mdl-msg').textContent = err.message; }
+}
+
+async function unloadOllama(name) {
+  try { await j('/api/admin/models/ollama/unload', { method: 'POST', body: JSON.stringify({ name }) });
+    document.getElementById('mdl-msg').textContent = 'Выгружена: ' + name; loadModels();
+  } catch (err) { document.getElementById('mdl-msg').textContent = err.message; }
+}
+
+async function deleteOllama(name) {
+  if (!confirm('Удалить модель ' + name + ' с диска?')) return;
+  try { await j('/api/admin/models/ollama?name=' + encodeURIComponent(name), { method: 'DELETE' });
+    document.getElementById('mdl-msg').textContent = 'Удалена: ' + name; loadModels();
+  } catch (err) { document.getElementById('mdl-msg').textContent = err.message; }
+}
+
+async function deleteHf(name) {
+  if (!confirm('Удалить модель ' + name + ' из кэша?')) return;
+  try { await j('/api/admin/models/hf?name=' + encodeURIComponent(name), { method: 'DELETE' });
+    document.getElementById('mdl-hf-msg').textContent = 'Удалена из кэша: ' + name; loadModels();
+  } catch (err) { document.getElementById('mdl-hf-msg').textContent = err.message; }
+}
+
+document.getElementById('mdl-pull').addEventListener('click', async () => {
+  const name = document.getElementById('mdl-pull-name').value.trim();
+  if (!name) { document.getElementById('mdl-msg').textContent = 'Введите имя модели'; return; }
+  try { await j('/api/admin/models/ollama/pull', { method: 'POST', body: JSON.stringify({ name }) });
+    document.getElementById('mdl-msg').textContent = 'Загрузка запущена: ' + name; loadModels();
+  } catch (err) { document.getElementById('mdl-msg').textContent = err.message; }
+});
+
+document.getElementById('mdl-hf-download').addEventListener('click', async () => {
+  const kind = document.getElementById('mdl-hf-kind').value;
+  const name = document.getElementById('mdl-hf-name').value.trim();
+  const msg = document.getElementById('mdl-hf-msg');
+  if (!name) { msg.textContent = 'Введите имя модели'; return; }
+  msg.textContent = 'Скачиваю ' + name + '…';
+  try {
+    await j('/api/admin/models/hf/download', { method: 'POST', body: JSON.stringify({ kind, name }) });
+    await j('/api/admin/models/hf/select', { method: 'POST', body: JSON.stringify({ kind, name }) });
+    msg.textContent = 'Скачано и выбрано: ' + name;
+    loadModels();
+  } catch (err) { msg.textContent = err.message; }
+});
 
 function docAction(url, options, button) {
   const msg = document.getElementById('doc-msg');
@@ -2344,7 +2581,7 @@ document.getElementById('doc-fetch').addEventListener('click', () => {
     .then(() => { input.value = ''; });
 });
 
-document.getElementById('doc-search').addEventListener('input', loadDocs);
+document.getElementById('doc-search').addEventListener('input', () => { docPage = 1; loadDocs(); });
 
 async function loadIndex() {
   if (indexTimer) clearInterval(indexTimer);

@@ -1,0 +1,17 @@
+# Вариант для встроенной/дискретной графики через /dev/dri (Intel, AMD, Vulkan).
+# Запуск:
+#   docker compose -f docker-compose.yml -f docker-compose.vulkan.yml up -d --build
+#
+# Даёт LLM-бэкенду (Ollama / llama.cpp с поддержкой Vulkan) доступ к GPU хоста.
+# Модели поиска на torch Vulkan не используют — для них остаётся auto/cpu.
+
+services:
+  app:
+    devices:
+      - /dev/dri:/dev/dri
+
+  ollama:
+    devices:
+      - /dev/dri:/dev/dri
+    environment:
+      - OLLAMA_VULKAN=${OLLAMA_VULKAN:-1}

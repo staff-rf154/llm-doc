@@ -76,10 +76,15 @@ def document_kind(rel: str) -> str:
 
 
 def plan_files() -> list[tuple[str, Path, str]]:
+    import appdb
+
+    excluded = appdb.excluded_keys()
     files: list[tuple[str, Path, str]] = []
     for root in config.SOURCE_ROOTS:
         for path in iter_documents(root):
             rel = str(Path(path).relative_to(root))
+            if (str(root), rel) in excluded:
+                continue
             files.append((str(root), path, rel))
     return files
 

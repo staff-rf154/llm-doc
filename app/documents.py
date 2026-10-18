@@ -205,29 +205,83 @@ def is_uploaded(name: str) -> bool:
         return False
 
 
-def delete_document(name: str) -> dict:
-    """Удалить загруженный документ с диска и его точки из активной коллекции."""
-    root = _uploads_root()
-    path = safe_name(name)
-    target = root / path
-    if not target.is_file():
-        raise ValueError("Можно удалять только загруженные документы из data/uploads")
+def _writable(root: str) -> bool:
+    try:
+        return Path(root).resolve() == Path(config.UPLOADS_DIR).resolve()
+    except OSError:
+        return False
+
+
+def delete_document(name: str, root: str | None = None) -> dict:
+    """Удалить документ: файл (если каталог доступен на запись) и точки из индекса.
+
+    Для read-only каталогов (data/docs) файл остаётся, но документ исключается из
+    индекса и из последующих переиндексаций.
+    """
+    root = root or config.UPLOADS_DIR
+    base = Path(root)
+    rel = safe_name(name)
+    target = base / rel
+    writable = _writable(root)
+    if writable and not target.is_file():
+        raise ValueError("Файл не найден в каталоге загрузок")
     collection = vs.target_name()
-    deleted = False
-    if target.exists() and target.is_file():
+    removed_file = False
+    if writable and target.is_file():
         target.unlink()
-        deleted = True
-    removed = vs.delete_source_points(path, collection)
-    index_state.forget_source(collection, f"{root}|{path}")
-    return {"name": path, "removed_file": deleted, "purged_points": removed}
+        removed_file = True
+    purged = vs.delete_source_points(rel, collection)
+    if purged == 0:
+        purged = vs.delete_source_points(target.name, collection)
+    index_state.forget_source(collection, f"{root}|{rel}")
+    if not writable:
+        import appdb
+
+        appdb.add_exclusion(root, rel)
+    else:
+        import appdb
+
+        appdb.remove_exclusion(root, rel)
+    return {
+        "name": rel,
+        "root": root,
+        "removed_file": removed_file,
+        "purged_points": purged,
+        "excluded": not writable,
+    }
+
+
+def restore_document(name: str, root: str | None = None) -> dict:
+    """Вернуть исключённый документ в индекс."""
+    import appdb
+
+    root = root or config.DOCS_DIR
+    rel = safe_name(name)
+    appdb.remove_exclusion(root, rel)
+    path = Path(root) / rel
+    if not path.is_file():
+        raise FileNotFoundError(f"Файл не найден: {rel}")
+    return index_single_document(root, path, rel)
+
+
+def index_single_document(root: str, path: Path, rel: str) -> dict:
+    import ingest
+
+    return ingest.index_single(root, path, rel)
 
 
 def list_documents() -> list[dict]:
     """Файлы во всех корнях документации и их состояние в индексе."""
+    import appdb
+
     try:
         indexed: dict[str, int] = index_sources()
     except Exception:
         indexed = {}
+    try:
+        excluded = appdb.excluded_keys()
+    except Exception:
+        excluded = set()
     items: list[dict] = []
     seen: set[tuple[str, str]] = set()
     for root in config.SOURCE_ROOTS:
@@ -244,17 +298,21 @@ def list_documents() -> list[dict]:
             if path.name.startswith("."):
                 continue
             stat = path.stat()
+            writable = _writable(root)
             items.append(
                 {
                     "name": rel,
                     "root": root,
-                    "editable": str(root) == config.UPLOADS_DIR,
+                    "editable": writable,
+                    "can_delete": True,
+                    "excluded": (root, rel) in excluded,
                     "format": FORMAT_LABELS.get(path.suffix.lower(), path.suffix.lower()),
                     "size": stat.st_size,
                     "modified": datetime.fromtimestamp(stat.st_mtime).strftime(
                         "%Y-%m-%d %H:%M"
                     ),
-                    "indexed": rel in indexed or path.name in indexed,
+                    "indexed": (rel in indexed or path.name in indexed)
+                    and (root, rel) not in excluded,
                     "chunks": indexed.get(rel, indexed.get(path.name, 0)),
                 }
             )

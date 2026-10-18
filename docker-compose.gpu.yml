@@ -1,0 +1,32 @@
+# GPU-вариант для NVIDIA (CUDA). Запуск:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+#
+# Требуется: драйвер NVIDIA и nvidia-container-toolkit на хосте.
+# Образ app пересобирается с CUDA-сборкой torch; ollama получает доступ к GPU.
+
+services:
+  app:
+    build:
+      context: ./app
+      args:
+        BASE_IMAGE: python:3.11-slim
+        TORCH_INDEX_URL: https://download.pytorch.org/whl/cu121
+    environment:
+      - EMBEDDER_DEVICE=${EMBEDDER_DEVICE:-auto}
+      - RERANKER_DEVICE=${RERANKER_DEVICE:-auto}
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+  ollama:
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]

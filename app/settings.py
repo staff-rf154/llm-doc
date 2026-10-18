@@ -10,6 +10,7 @@ from dataclasses import dataclass, field
 
 import appdb
 import config
+import settingsdb
 
 BOOL_TRUE = ("1", "true", "yes", "on")
 
@@ -23,6 +24,7 @@ class Param:
     hint: str = ""
     requires_reindex: bool = False
     secret: bool = False
+    editable: bool = True
     options: list[str] = field(default_factory=list)
 
     def default(self) -> str:
@@ -51,7 +53,9 @@ LESSONS = "Обучение"
 HYBRID = "Гибридный поиск"
 RERANK = "Переранжирование"
 UPLOADS = "Загрузка документов"
+LOGS = "Разбор логов"
 AUTOLEARN = "Автообучение"
+INFRA = "Инфраструктура (только чтение)"
 
 PARAMS: list[Param] = [
     Param("LLM_MODEL", "Модель генерации", group=GENERATION,
@@ -87,6 +91,9 @@ PARAMS: list[Param] = [
           hint="Для multilingual-e5-base обязательно 'passage: '"),
     Param("EMBED_BATCH", "Батч эмбеддингов", "int", group=RETRIEVAL,
           hint="Сколько фрагментов считать эмбеддингами за раз при индексации"),
+    Param("EMBEDDER_DEVICE", "Устройство модели эмбеддингов", group=RETRIEVAL,
+          options=["auto", "cpu", "cuda"],
+          hint="auto — GPU при наличии CUDA, иначе CPU. Смена модели эмбеддингов требует переиндексации"),
     Param("HYBRID_SPARSE", "Гибридный поиск (dense + BM25)", "bool", group=HYBRID,
           hint="Включать точный поиск BM25 вместе с векторным. Требует индексации со sparse-векторами"),
     Param("SPARSE_MODEL", "BM25-модель", group=HYBRID, requires_reindex=True,
@@ -106,7 +113,10 @@ PARAMS: list[Param] = [
     Param("RERANKER_MAX_LENGTH", "Максимум токенов на пару", "int", group=RERANK,
           hint="Ограничение длины фрагмента для оценки: меньше — быстрее"),
     Param("RERANKER_BATCH", "Батч reranker'а", "int", group=RERANK,
-          hint="Сколько пар оценивается за раз на CPU"),
+          hint="Сколько пар оценивается за раз"),
+    Param("RERANKER_DEVICE", "Устройство reranker'а", group=RERANK,
+          options=["auto", "cpu", "cuda"],
+          hint="auto — GPU при наличии CUDA, иначе CPU"),
     Param("PLATFORM_AWARE", "Учитывать Windows и Linux", "bool", group=RETRIEVAL,
           hint="Догружать фрагменты документа для другой ОС, если ОС не указана в вопросе"),
     Param("PLATFORM_EXTRA_CHUNKS", "Фрагментов второй ОС", "int", group=RETRIEVAL,
@@ -176,6 +186,40 @@ PARAMS: list[Param] = [
           hint="Сколько вопросов сферы прогонять за цикл первичного обучения"),
     Param("BOOTSTRAP_JUDGE", "Оценивать первичное обучение моделью", "bool", group=AUTOLEARN,
           hint="Подключать LLM-судью и сбор уроков-кандидатов при первичном обучении"),
+    Param("CORRECTIONS_COLLECTION", "Коллекция исправлений", group=RETRIEVAL,
+          hint="Имя коллекции Qdrant для исправлений ответов"),
+    Param("SYNONYMS_CACHE_TTL", "Кэш словаря синонимов, сек", "int", group=RETRIEVAL),
+    Param("SYNONYMS_SEED_ON_START", "Заполнять словарь при старте", "bool", group=RETRIEVAL,
+          hint="Добавлять стартовый набор синонимов, если словарь пуст"),
+    Param("PROMPTS_CACHE_TTL", "Кэш стартовых промтов, сек", "int", group=BEHAVIOUR),
+    Param("DOCS_BASE_URL", "Базовый адрес документации", group=WEBSITES,
+          hint="Префикс ссылок на документы в ответах, если ссылка не задана отдельно"),
+    Param("IMAGES_COLLECTION", "Коллекция изображений", group=IMAGES),
+    Param("LOGS_MAX_CHARS", "Символов логов в ответе", "int", group=LOGS,
+          hint="Сколько символов выдержек из логов отдавать модели, остальное отбрасывается"),
+    Param("LOGS_CONTEXT_LINES", "Строк контекста вокруг ошибки", "int", group=LOGS,
+          hint="Сколько соседних строк показывать вокруг найденной важной строки"),
+    Param("APP_DB", "База данных приложения", group=INFRA, editable=False),
+    Param("SETTINGS_DB", "База данных настроек", group=INFRA, editable=False),
+    Param("QDRANT_URL", "Адрес Qdrant", group=INFRA, editable=False),
+    Param("QDRANT_COLLECTION", "Базовая коллекция Qdrant", group=INFRA, editable=False),
+    Param("QDRANT_API_KEY", "Ключ Qdrant", group=INFRA, secret=True, editable=False),
+    Param("INDEX_STATE_DB", "База состояния индексации", group=INFRA, editable=False),
+    Param("DOCS_DIR", "Каталог документации", group=INFRA, editable=False),
+    Param("EXTRACTED_DIR", "Каталог извлечённого текста", group=INFRA, editable=False),
+    Param("UPLOADS_DIR", "Каталог загрузок", group=INFRA, editable=False),
+    Param("EVAL_DIR", "Каталог оценок", group=INFRA, editable=False),
+    Param("LOGS_ROOT", "Корень логов (только чтение)", group=INFRA, editable=False),
+    Param("LOGS_MAX_FILES", "Максимум файлов логов", "int", group=INFRA, editable=False),
+    Param("LOGS_MAX_FILE_BYTES", "Максимум размера файла, байт", "int", group=INFRA, editable=False),
+    Param("LOGS_MAX_UNPACKED_BYTES", "Максимум распакованного, байт", "int", group=INFRA, editable=False),
+    Param("IMAGES_DIR", "Каталог изображений", group=INFRA, editable=False),
+    Param("PROMPTS_DB", "База стартовых промтов", group=INFRA, editable=False),
+    Param("SYNONYMS_DB", "База синонимов", group=INFRA, editable=False),
+    Param("ADMIN_USERNAME", "Логин администратора по умолчанию", group=INFRA, editable=False),
+    Param("ADMIN_PASSWORD", "Пароль администратора по умолчанию", group=INFRA, secret=True, editable=False),
+    Param("DOMAIN_PROFILE", "Профиль сферы по умолчанию", group=INFRA, editable=False),
+    Param("EMBED_DIM", "Размерность эмбеддингов", "int", group=INFRA, editable=False),
 ]
 
 CACHE_TTL = 3.0
@@ -196,9 +240,7 @@ def _stored() -> dict[str, str]:
             return _cache["values"]
     values: dict[str, str] = {}
     try:
-        with appdb.connect() as conn:
-            rows = conn.execute("SELECT key, value FROM settings").fetchall()
-            values = {row["key"]: row["value"] for row in rows}
+        values = settingsdb.all()
     except Exception:
         values = {}
     with _lock:
@@ -272,6 +314,7 @@ def describe() -> list[dict]:
                 "group": param.group,
                 "hint": param.hint,
                 "secret": param.secret,
+                "editable": param.editable,
                 "requires_reindex": param.requires_reindex,
                 "value": effective(param.key),
                 "default": param.default(),
@@ -282,7 +325,10 @@ def describe() -> list[dict]:
 
 
 def _validate(param: Param, value: str) -> str:
-    text = (value or "").strip()
+    raw = value if value is not None else ""
+    if param.key in PREFIX_KEYS:
+        return raw
+    text = raw.strip()
     if param.type == "int":
         try:
             number = int(float(text))
@@ -308,16 +354,115 @@ def _validate(param: Param, value: str) -> str:
     return text
 
 
-def save(values: dict[str, str]) -> list[str]:
-    """Сохранить значения; возвращает ключи, требующие переиндексации."""
+def _as_int(text: str, fallback: int = 0) -> int:
+    try:
+        return int(float(str(text)))
+    except (TypeError, ValueError):
+        return fallback
+
+
+def _as_float(text: str, fallback: float = 0.0) -> float:
+    try:
+        return float(str(text).replace(",", "."))
+    except (TypeError, ValueError):
+        return fallback
+
+
+RANGES = {
+    "LLM_TEMPERATURE": (0.0, 2.0),
+    "CORRECTION_MATCH_THRESHOLD": (0.0, 1.0),
+    "AUTOLEARN_TOPIC_THRESHOLD": (0.0, 1.0),
+    "IMAGE_MATCH_THRESHOLD": (0.0, 1.0),
+    "LESSONS_MIN_SCORE": (0.0, 1.0),
+    "IMAGE_SKIP_FULLPAGE": (0.0, 1.0),
+    "LOGS_MAX_CHARS": (1000, 200000),
+    "LOGS_CONTEXT_LINES": (0, 20),
+}
+
+
+def consistency(prospective: dict[str, str]) -> tuple[list[str], list[str]]:
+    """Перекрёстная проверка значений: (ошибки, предупреждения)."""
+    errors: list[str] = []
+    warnings: list[str] = []
+
+    def num(key: str) -> float:
+        return _as_float(prospective.get(key, effective(key)))
+
+    def flag(key: str) -> bool:
+        text = prospective.get(key, effective(key))
+        return str(text).strip().lower() in BOOL_TRUE
+
+    for key, (low, high) in RANGES.items():
+        value = num(key)
+        if value < low or value > high:
+            warnings.append(f"{key}: значение {value} вне диапазона {low}–{high}")
+
+    size, overlap = _as_int(prospective.get("CHUNK_SIZE", effective("CHUNK_SIZE"))), _as_int(
+        prospective.get("CHUNK_OVERLAP", effective("CHUNK_OVERLAP"))
+    )
+    if overlap >= size:
+        errors.append("Перекрытие чанков должно быть меньше размера чанка")
+
+    top_k = _as_int(prospective.get("RETRIEVE_TOP_K", effective("RETRIEVE_TOP_K")))
+    candidates = _as_int(prospective.get("HYBRID_CANDIDATES", effective("HYBRID_CANDIDATES")))
+    if top_k > candidates:
+        warnings.append(
+            "Фрагментов в ответе больше, чем кандидатов гибридного поиска: часть не находится"
+        )
+    if flag("RERANKER_ENABLED"):
+        if not str(prospective.get("RERANKER_MODEL", effective("RERANKER_MODEL"))).strip():
+            errors.append("Переранжирование включено, но модель reranker'а не задана")
+        rerank_cand = _as_int(prospective.get("RERANKER_CANDIDATES", effective("RERANKER_CANDIDATES")))
+        rerank_top = _as_int(prospective.get("RERANKER_TOP_K", effective("RERANKER_TOP_K")))
+        if rerank_top > rerank_cand:
+            warnings.append("Фрагментов после reranker'а больше, чем кандидатов на переранжирование")
+        if rerank_cand > candidates:
+            warnings.append("Кандидатов reranker'а больше, чем кандидатов поиска")
+    if flag("HYBRID_SPARSE") and not str(
+        prospective.get("SPARSE_MODEL", effective("SPARSE_MODEL"))
+    ).strip():
+        errors.append("Гибридный поиск включён, но BM25-модель не задана")
+
+    sources = str(prospective.get("QUESTIONGEN_SOURCES", effective("QUESTIONGEN_SOURCES")))
+    allowed = {"docs", "topics", "domain"}
+    unknown = {part.strip() for part in sources.split(",") if part.strip()} - allowed
+    if unknown:
+        errors.append(
+            "Источники вопросов могут быть только: docs, topics, domain (лишние: "
+            + ", ".join(sorted(unknown))
+            + ")"
+        )
+
+    model = str(prospective.get("EMBEDDING_MODEL", effective("EMBEDDING_MODEL")))
+    if "e5" in model.lower():
+        query_prefix = str(prospective.get("E5_QUERY_PREFIX", effective("E5_QUERY_PREFIX")))
+        passage_prefix = str(prospective.get("E5_PASSAGE_PREFIX", effective("E5_PASSAGE_PREFIX")))
+        if query_prefix != "query: ":
+            warnings.append("Для модели e5 префикс запроса должен быть «query: » (с пробелом)")
+        if passage_prefix != "passage: ":
+            warnings.append("Для модели e5 префикс документа должен быть «passage: » (с пробелом)")
+    return errors, warnings
+
+
+def save(values: dict[str, str]) -> dict:
+    """Сохранить значения; возвращает ключи для переиндексации и предупреждения."""
     changed: list[str] = []
     reindex: list[str] = []
     by_key = {param.key: param for param in PARAMS}
+    prospective: dict[str, str] = {}
     for key, raw_value in values.items():
         param = by_key.get(key)
         if param is None:
             raise ValueError(f"Неизвестный параметр: {key}")
+        if not param.editable:
+            raise ValueError(f"{param.label}: параметр доступен только для чтения")
         text = _validate(param, str(raw_value))
+        prospective[key] = text
+    errors, warnings = consistency(prospective)
+    if errors:
+        raise ValueError("; ".join(errors))
+    for key, text in prospective.items():
+        param = by_key[key]
         if effective(key) == text:
             continue
         appdb.set_setting(key, text)
@@ -327,10 +472,18 @@ def save(values: dict[str, str]) -> list[str]:
     invalidate()
     if changed:
         _reload_models()
-    return reindex
+    return {"reindex": reindex, "warnings": warnings, "changed": changed}
 
 
-MODEL_KEYS = ("SPARSE_MODEL", "RERANKER_MODEL", "RERANKER_MAX_LENGTH", "EMBEDDING_MODEL")
+MODEL_KEYS = (
+    "SPARSE_MODEL",
+    "RERANKER_MODEL",
+    "RERANKER_MAX_LENGTH",
+    "EMBEDDING_MODEL",
+    "EMBEDDER_DEVICE",
+    "RERANKER_DEVICE",
+)
+PREFIX_KEYS = ("E5_QUERY_PREFIX", "E5_PASSAGE_PREFIX")
 
 
 def _reload_models() -> None:
@@ -364,6 +517,8 @@ def groups() -> list[str]:
         IMAGES,
         AUTOLEARN,
         INGEST,
+        LOGS,
+        INFRA,
     ]
     present = {param.group for param in PARAMS}
     return [group for group in order if group in present]

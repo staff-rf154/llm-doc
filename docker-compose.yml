@@ -36,6 +36,9 @@ services:
   app:
     build:
       context: ./app
+      args:
+        BASE_IMAGE: ${BASE_IMAGE:-python:3.11-slim}
+        TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
     container_name: llm-app
     env_file:
       - .env
@@ -49,6 +52,7 @@ services:
       - OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}
       - EMBED_BATCH=${EMBED_BATCH:-16}
       - APP_DB=/data/app/app.db
+      - SETTINGS_DB=/data/settings/settings.db
       - ADMIN_USERNAME=${ADMIN_USERNAME:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       - APP_TITLE=${APP_TITLE:-База знаний}
@@ -75,6 +79,12 @@ services:
       - WEB_CRAWL_DELAY_MS=${WEB_CRAWL_DELAY_MS:-500}
       - WEB_CRAWL_RESPECT_ROBOTS=${WEB_CRAWL_RESPECT_ROBOTS:-1}
       - IMAGES_DIR=/data/images
+      - LOGS_ROOT=/data/logs
+      - LOGS_MAX_CHARS=${LOGS_MAX_CHARS:-16000}
+      - LOGS_CONTEXT_LINES=${LOGS_CONTEXT_LINES:-2}
+      - LOGS_MAX_FILES=${LOGS_MAX_FILES:-200}
+      - LOGS_MAX_FILE_BYTES=${LOGS_MAX_FILE_BYTES:-83886080}
+      - LOGS_MAX_UNPACKED_BYTES=${LOGS_MAX_UNPACKED_BYTES:-419430400}
       - IMAGES_COLLECTION=${IMAGES_COLLECTION:-images}
       - IMAGE_SEARCH_ENABLED=${IMAGE_SEARCH_ENABLED:-1}
       - IMAGE_MATCH_THRESHOLD=${IMAGE_MATCH_THRESHOLD:-0.75}
@@ -103,6 +113,8 @@ services:
       - RERANKER_CANDIDATES=${RERANKER_CANDIDATES:-10}
       - RERANKER_MAX_LENGTH=${RERANKER_MAX_LENGTH:-512}
       - RERANKER_TOP_K=${RERANKER_TOP_K:-5}
+      - EMBEDDER_DEVICE=${EMBEDDER_DEVICE:-auto}
+      - RERANKER_DEVICE=${RERANKER_DEVICE:-auto}
       - UPLOAD_MAX_MB=${UPLOAD_MAX_MB:-100}
       - UPLOAD_URL_TIMEOUT=${UPLOAD_URL_TIMEOUT:-60}
       - PLATFORM_EXTRA_CHUNKS=${PLATFORM_EXTRA_CHUNKS:-2}
@@ -118,8 +130,10 @@ services:
       - ./data/prompts:/data/prompts
       - ./data/index_state:/data/index_state
       - ./data/app:/data/app
+      - ./data/settings:/data/settings
       - ./data/synonyms:/data/synonyms
       - ./data/images:/data/images
+      - ./data/logs:/data/logs:ro
       - ./app/.cache:/app/.cache
     ports:
       - "${APP_PORT}:8000"

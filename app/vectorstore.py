@@ -11,6 +11,43 @@ import settings
 EMBED_LOCK = threading.Lock()
 
 
+def resolve_device(pref: str) -> str:
+    """Выбор устройства torch: auto → cuda при наличии, иначе cpu."""
+    pref = (pref or "auto").strip().lower()
+    if pref == "cpu":
+        return "cpu"
+    if pref == "cuda":
+        return "cuda"
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
+def device_info() -> dict:
+    info = {
+        "cuda": False,
+        "torch": "",
+        "cuda_version": "",
+        "gpu": "",
+        "embedder": resolve_device(settings.value("EMBEDDER_DEVICE", config.EMBEDDER_DEVICE)),
+        "reranker": resolve_device(settings.value("RERANKER_DEVICE", config.RERANKER_DEVICE)),
+    }
+    try:
+        import torch
+
+        info["torch"] = torch.__version__
+        info["cuda_version"] = torch.version.cuda or ""
+        info["cuda"] = torch.cuda.is_available()
+        if info["cuda"]:
+            info["gpu"] = torch.cuda.get_device_name(0)
+    except Exception:
+        pass
+    return info
+
+
 def sparse_enabled() -> bool:
     """Гибридный поиск включён и настроен на слияние rrf."""
     if not settings.bool_value("HYBRID_SPARSE", config.HYBRID_SPARSE):
@@ -29,7 +66,10 @@ def get_qdrant() -> QdrantClient:
 
 @lru_cache(maxsize=1)
 def get_embedder() -> SentenceTransformer:
-    model = SentenceTransformer(config.EMBEDDING_MODEL, device="cpu")
+    model = SentenceTransformer(
+        settings.value("EMBEDDING_MODEL", config.EMBEDDING_MODEL),
+        device=resolve_device(settings.value("EMBEDDER_DEVICE", config.EMBEDDER_DEVICE)),
+    )
     model.max_seq_length = 512
     return model
 
@@ -50,7 +90,7 @@ def get_reranker(name: str = "", max_length: int = 0):
 
     return CrossEncoder(
         name or settings.value("RERANKER_MODEL", config.RERANKER_MODEL),
-        device="cpu",
+        device=resolve_device(settings.value("RERANKER_DEVICE", config.RERANKER_DEVICE)),
         max_length=int(
             max_length
             or settings.int_value("RERANKER_MAX_LENGTH")

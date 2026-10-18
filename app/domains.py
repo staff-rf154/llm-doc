@@ -21,6 +21,15 @@ DEFAULT_SLUG = "general"
 SEED_VERSION = 4
 SEED_VERSION_KEY = "domains_seed_version"
 
+INFERENCE_BLOCK = (
+    "В этой сфере деятельности допускается небольшой домысел. Если во фрагментах "
+    "нет полного ответа, ты можешь, опираясь только на них, аккуратно достроить ответ: "
+    "предложить типовой порядок действий, структуру документа или общий совет. "
+    "Помечай предположения словами «вероятно», «как правило», «рекомендую уточнить» "
+    "и не выдавай их за факты из документации. Никогда не выдумывай конкретные номера "
+    "страниц, точные команды, реквизиты и названия, которых нет во фрагментах."
+)
+
 SEED: list[dict] = [
     {
         "slug": "general",
@@ -1170,6 +1179,8 @@ def _insert_item(item: dict, base: str) -> dict:
         categories=item.get("categories", []),
         terminology=item.get("terminology", []),
         sample_questions=item.get("sample_questions", []),
+        temperature=item.get("temperature"),
+        allow_inference=bool(item.get("allow_inference", False)),
         is_builtin=True,
     )
 
@@ -1234,9 +1245,12 @@ def _unique_slug(base: str, exclude: str | None = None) -> str:
 
 
 def list_profiles() -> list[dict]:
-    """Полный каталог направлений для кабинета."""
+    """Полный каталог направлений для кабинета (по алфавиту)."""
     ensure_seed()
-    return appdb.list_domains()
+    return sorted(
+        appdb.list_domains(),
+        key=lambda item: (item.get("title") or "").casefold().replace("ё", "е"),
+    )
 
 
 def current_id() -> str:
@@ -1282,8 +1296,33 @@ def reset() -> dict:
 
 def system_prompt() -> str:
     """Системная инструкция активного направления (иначе — общая из настроек)."""
-    prompt = (current().get("system_prompt") or "").strip()
+    item = current()
+    prompt = (item.get("system_prompt") or "").strip()
+    if prompt and item.get("allow_inference"):
+        prompt = f"{prompt}\n\n{INFERENCE_BLOCK}"
     return prompt or _base_prompt()
+
+
+def temperature() -> float | None:
+    """Температура генерации направления; None — использовать общую."""
+    value = current().get("temperature")
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    return number if number >= 0 else None
+
+
+def allow_inference() -> bool:
+    """Разрешён ли в активном направлении небольшой домысел."""
+    return bool(current().get("allow_inference"))
+
+
+def log_analysis() -> bool:
+    """Умеет ли активное направление разбирать логи по указанному пути."""
+    return bool(current().get("log_analysis"))
 
 
 def capabilities() -> list[dict]:
@@ -1319,6 +1358,9 @@ def create(data: dict) -> dict:
         categories=_clean_list(data.get("categories")),
         terminology=_clean_list(data.get("terminology")),
         sample_questions=_clean_list(data.get("sample_questions")),
+        temperature=_clean_temperature(data.get("temperature")),
+        allow_inference=bool(data.get("allow_inference")),
+        log_analysis=bool(data.get("log_analysis")),
         is_builtin=False,
     )
 
@@ -1346,6 +1388,12 @@ def update(slug: str, data: dict) -> dict:
         fields["terminology"] = _clean_list(data.get("terminology"))
     if "sample_questions" in data:
         fields["sample_questions"] = _clean_list(data.get("sample_questions"))
+    if "temperature" in data:
+        fields["temperature"] = _clean_temperature(data.get("temperature"))
+    if "allow_inference" in data:
+        fields["allow_inference"] = bool(data.get("allow_inference"))
+    if "log_analysis" in data:
+        fields["log_analysis"] = bool(data.get("log_analysis"))
     if data.get("slug"):
         new_slug = _unique_slug(slugify(data["slug"]), exclude=slug)
         if new_slug and new_slug != slug:
@@ -1384,8 +1432,23 @@ def duplicate(slug: str) -> dict:
         categories=source.get("categories", []),
         terminology=source.get("terminology", []),
         sample_questions=source.get("sample_questions", []),
+        temperature=source.get("temperature"),
+        allow_inference=bool(source.get("allow_inference")),
+        log_analysis=bool(source.get("log_analysis")),
         is_builtin=False,
     )
+
+
+def _clean_temperature(raw) -> float | None:
+    if raw is None or raw == "":
+        return None
+    try:
+        number = float(raw)
+    except (TypeError, ValueError):
+        return None
+    if number < 0 or number > 2:
+        return None
+    return round(number, 2)
 
 
 def _clean_list(raw) -> list[str]:

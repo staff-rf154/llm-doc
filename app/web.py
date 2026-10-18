@@ -234,13 +234,13 @@ def _sse(payloads: list[dict]):
 @router.get("/", include_in_schema=False)
 def index() -> FileResponse:
     path = Path(__file__).parent / "static" / "index.html"
-    return FileResponse(path)
+    return FileResponse(path, headers={"Cache-Control": "no-store"})
 
 
 @router.get("/admin", include_in_schema=False)
 def admin_page() -> FileResponse:
     path = Path(__file__).parent / "static" / "admin.html"
-    return FileResponse(path)
+    return FileResponse(path, headers={"Cache-Control": "no-store"})
 
 
 @router.post("/chat", include_in_schema=False)

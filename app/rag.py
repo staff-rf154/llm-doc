@@ -4,6 +4,7 @@ from openai import OpenAI
 
 import config
 import domains
+import logtools
 import settings
 import vectorstore as vs
 from capabilities import is_capabilities_question, render as render_capabilities
@@ -406,9 +407,46 @@ def correction_examples(question: str) -> list[dict]:
         return []
 
 
+def answer_from_logs(question: str, report: dict) -> Answer:
+    """Ответ по выдержкам из логов, без поиска по документации."""
+    client = get_client()
+    temperature = domains.temperature()
+    if temperature is None:
+        temperature = settings.float_value("LLM_TEMPERATURE")
+    completion = client.chat.completions.create(
+        model=settings.value("LLM_MODEL", config.LLM_MODEL),
+        messages=[
+            {"role": "system", "content": domains.system_prompt()},
+            {"role": "user", "content": logtools.build_prompt(question, report)},
+        ],
+        temperature=temperature,
+    )
+    text = (completion.choices[0].message.content or "").strip()
+    text += logtools.sources_block(report)
+    chunks = [
+        RetrievedChunk(
+            text=item["text"][:4000],
+            source=item["name"],
+            chunk=index,
+            score=1.0,
+            title=item["name"],
+            kind="log",
+        )
+        for index, item in enumerate(report.get("files", []), start=1)
+    ]
+    return Answer(text=text, chunks=chunks, grounded=True)
+
+
 def ask(question: str, top_k: int | None = None) -> Answer:
     if is_capabilities_question(question):
         return capabilities_answer()
+
+    if domains.log_analysis() and logtools.find_path(question):
+        try:
+            report = logtools.analyze(question)
+        except logtools.LogError as exc:
+            return Answer(text=str(exc), chunks=[], grounded=False)
+        return answer_from_logs(question, report)
 
     exact = find_correction(question)
     if exact:
@@ -439,6 +477,9 @@ def ask(question: str, top_k: int | None = None) -> Answer:
         )
 
     client = get_client()
+    temperature = domains.temperature()
+    if temperature is None:
+        temperature = settings.float_value("LLM_TEMPERATURE")
     completion = client.chat.completions.create(
         model=settings.value("LLM_MODEL", config.LLM_MODEL),
         messages=[
@@ -448,7 +489,7 @@ def ask(question: str, top_k: int | None = None) -> Answer:
                 "content": build_prompt(question, chunks, correction_examples(question)),
             },
         ],
-        temperature=settings.float_value("LLM_TEMPERATURE"),
+        temperature=temperature,
     )
     text = (completion.choices[0].message.content or "").strip()
     grounded = NO_ANSWER_MARKER not in text.lower()

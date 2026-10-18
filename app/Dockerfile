@@ -1,4 +1,5 @@
-FROM python:3.11-slim
+ARG BASE_IMAGE=python:3.11-slim
+FROM ${BASE_IMAGE}
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
@@ -11,7 +12,8 @@ RUN apt-get update \
 WORKDIR /app
 ENV PYTHONPATH=/app
 
-RUN pip install --index-url https://download.pytorch.org/whl/cpu torch==2.5.1
+ARG TORCH_INDEX_URL=https://download.pytorch.org/whl/cpu
+RUN pip install --index-url ${TORCH_INDEX_URL} torch==2.5.1
 
 COPY requirements.txt .
 RUN pip install -r requirements.txt
