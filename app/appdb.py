@@ -5,6 +5,7 @@ import hmac
 from pathlib import Path
 import json
 import os
+import re
 import secrets
 import sqlite3
 import threading
@@ -143,6 +144,25 @@ CREATE TABLE IF NOT EXISTS topic_requests (
     score REAL NOT NULL DEFAULT 0,
     PRIMARY KEY (topic_id, request_id)
 );
+CREATE TABLE IF NOT EXISTS generated_questions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    question TEXT NOT NULL,
+    norm TEXT NOT NULL DEFAULT '',
+    source TEXT NOT NULL DEFAULT 'docs',
+    doc_source TEXT NOT NULL DEFAULT '',
+    doc_chunk INTEGER,
+    variant INTEGER NOT NULL DEFAULT 0,
+    request_id INTEGER,
+    verdict TEXT NOT NULL DEFAULT '',
+    cluster_id INTEGER,
+    duplicate_of INTEGER,
+    similarity REAL NOT NULL DEFAULT 0,
+    vector BLOB,
+    created_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_genq_norm ON generated_questions(norm);
+CREATE INDEX IF NOT EXISTS idx_genq_cluster ON generated_questions(cluster_id);
+CREATE INDEX IF NOT EXISTS idx_genq_source ON generated_questions(source);
 CREATE TABLE IF NOT EXISTS domains (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     slug TEXT NOT NULL UNIQUE,
@@ -1501,3 +1521,219 @@ def topic_requests(topic_id: int, limit: int = 50) -> list[dict]:
             (topic_id, limit),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def normalize_question(text: str) -> str:
+    """Нормализованная форма вопроса для точного сопоставления."""
+    value = re.sub(r"[^\w\s]", " ", (text or "").lower(), flags=re.UNICODE)
+    return re.sub(r"\s+", " ", value).strip()
+
+
+def save_generated_question(
+    question: str,
+    source: str = "docs",
+    doc_source: str = "",
+    doc_chunk: int | None = None,
+    variant: int = 0,
+) -> dict | None:
+    """Запомнить сгенерированный вопрос. Точный дубль возвращает существующую запись."""
+    ensure_schema()
+    text = (question or "").strip()
+    if len(text) < 4:
+        return None
+    norm = normalize_question(text)
+    if not norm:
+        return None
+    with _LOCK, connect() as conn:
+        row = conn.execute(
+            "SELECT * FROM generated_questions WHERE norm = ?", (norm,)
+        ).fetchone()
+        if row:
+            return dict(row)
+        cur = conn.execute(
+            """
+            INSERT INTO generated_questions
+                (question, norm, source, doc_source, doc_chunk, variant, created_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                text,
+                norm,
+                source,
+                doc_source,
+                int(doc_chunk) if doc_chunk is not None else None,
+                int(variant),
+                now(),
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM generated_questions WHERE id = ?", (int(cur.lastrowid),)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def existing_generated_norms() -> set[str]:
+    ensure_schema()
+    with connect() as conn:
+        rows = conn.execute("SELECT norm FROM generated_questions").fetchall()
+    return {row["norm"] for row in rows}
+
+
+def update_generated_result(qid: int, request_id: int, verdict: str) -> None:
+    ensure_schema()
+    with _LOCK, connect() as conn:
+        conn.execute(
+            "UPDATE generated_questions SET request_id = ?, verdict = ? WHERE id = ?",
+            (int(request_id), verdict or "", int(qid)),
+        )
+
+
+def store_generated_vector(qid: int, blob: bytes) -> None:
+    ensure_schema()
+    with _LOCK, connect() as conn:
+        conn.execute(
+            "UPDATE generated_questions SET vector = ? WHERE id = ?", (blob, int(qid))
+        )
+
+
+def list_generated_questions(
+    limit: int = 100,
+    offset: int = 0,
+    source: str | None = None,
+    only_duplicates: bool = False,
+) -> list[dict]:
+    ensure_schema()
+    query = """
+        SELECT id, question, source, doc_source, doc_chunk, variant, request_id,
+               verdict, cluster_id, duplicate_of, similarity, created_at
+        FROM generated_questions WHERE 1 = 1
+    """
+    params: list = []
+    if source:
+        query += " AND source = ?"
+        params.append(source)
+    if only_duplicates:
+        query += " AND duplicate_of IS NOT NULL"
+    query += " ORDER BY id DESC LIMIT ? OFFSET ?"
+    params.extend([limit, offset])
+    with connect() as conn:
+        rows = conn.execute(query, params).fetchall()
+    return [dict(row) for row in rows]
+
+
+def count_generated_questions(source: str | None = None, only_duplicates: bool = False) -> int:
+    ensure_schema()
+    query = "SELECT COUNT(*) AS n FROM generated_questions WHERE 1 = 1"
+    params: list = []
+    if source:
+        query += " AND source = ?"
+        params.append(source)
+    if only_duplicates:
+        query += " AND duplicate_of IS NOT NULL"
+    with connect() as conn:
+        return int(conn.execute(query, params).fetchone()["n"])
+
+
+def generated_vectors(limit: int = 2000) -> list[dict]:
+    """Все запомненные вопросы с кэшированными векторами (свежие первыми)."""
+    ensure_schema()
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT id, question, vector FROM generated_questions
+            ORDER BY id DESC LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def set_generated_similarity(assignments: list[dict]) -> int:
+    """Записать результаты анализа схожести: кластер и почти-дубль."""
+    ensure_schema()
+    with _LOCK, connect() as conn:
+        for item in assignments:
+            conn.execute(
+                """
+                UPDATE generated_questions
+                SET cluster_id = ?, duplicate_of = ?, similarity = ?
+                WHERE id = ?
+                """,
+                (
+                    item.get("cluster_id"),
+                    item.get("duplicate_of"),
+                    float(item.get("similarity", 0)),
+                    int(item["id"]),
+                ),
+            )
+    return len(assignments)
+
+
+def generated_clusters(limit: int = 50) -> list[dict]:
+    """Кластеры похожих вопросов: представитель и число формулировок."""
+    ensure_schema()
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT cluster_id,
+                   COUNT(*) AS total,
+                   SUM(CASE WHEN duplicate_of IS NOT NULL THEN 1 ELSE 0 END) AS duplicates,
+                   MAX(similarity) AS best_similarity
+            FROM generated_questions
+            WHERE cluster_id IS NOT NULL
+            GROUP BY cluster_id
+            HAVING COUNT(*) > 1
+            ORDER BY total DESC LIMIT ?
+            """,
+            (limit,),
+        ).fetchall()
+        clusters = []
+        for row in rows:
+            cluster_id = int(row["cluster_id"])
+            members = conn.execute(
+                """
+                SELECT id, question, source, doc_source, duplicate_of, similarity, verdict
+                FROM generated_questions WHERE cluster_id = ?
+                ORDER BY duplicate_of IS NULL DESC, similarity DESC, id ASC
+                """,
+                (cluster_id,),
+            ).fetchall()
+            clusters.append(
+                {
+                    "cluster_id": cluster_id,
+                    "total": int(row["total"]),
+                    "duplicates": int(row["duplicates"] or 0),
+                    "representative": (members[0]["question"] if members else ""),
+                    "members": [dict(member) for member in members],
+                }
+            )
+    return clusters
+
+
+def generated_similarity_summary() -> dict:
+    ensure_schema()
+    with connect() as conn:
+        total = int(conn.execute("SELECT COUNT(*) AS n FROM generated_questions").fetchone()["n"])
+        duplicates = int(
+            conn.execute(
+                "SELECT COUNT(*) AS n FROM generated_questions WHERE duplicate_of IS NOT NULL"
+            ).fetchone()["n"]
+        )
+        clusters = int(
+            conn.execute(
+                """
+                SELECT COUNT(*) AS n FROM (
+                    SELECT cluster_id FROM generated_questions
+                    WHERE cluster_id IS NOT NULL
+                    GROUP BY cluster_id HAVING COUNT(*) > 1
+                )
+                """
+            ).fetchone()["n"]
+        )
+    return {"total": total, "clusters": clusters, "duplicates": duplicates}
+
+
+def clear_generated_questions() -> None:
+    ensure_schema()
+    with _LOCK, connect() as conn:
+        conn.execute("DELETE FROM generated_questions")

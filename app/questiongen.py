@@ -30,10 +30,12 @@ ORIGIN = "generated"
 
 DOC_SYSTEM = (
     "Ты — методист по внутренней документации компании. "
-    "Тебе дают фрагменты документа. Составь по ним проверочные вопросы, "
-    "на которые эти фрагменты дают ответ. Формулируй конкретно, на русском, "
-    "используй термины и названия из фрагментов и не выдумывай факты. "
-    'Верни строго JSON без пояснений: {"questions": ["вопрос", "вопрос"]}.'
+    "Тебе дают фрагмент документа. Составь по нему проверочные вопросы, "
+    "которые проверяют один и тот же факт из фрагмента, но сформулированы по-разному: "
+    "в разных наклонениях и формах (что это; как сделать; почему; зачем; в каком случае; "
+    "что делать, если), с синонимами и иным порядком слов. "
+    "Каждый вопрос должен иметь ответ в этом фрагменте. Не выдумывай факты и номера страниц. "
+    'Верни строго JSON без пояснений: {"questions": ["вопрос", "вопрос", "вопрос"]}.'
 )
 
 TOPIC_SYSTEM = (
@@ -53,6 +55,10 @@ DOMAIN_SYSTEM = (
 
 def _count() -> int:
     return settings.int_value("QUESTIONGEN_COUNT") or config.QUESTIONGEN_COUNT
+
+
+def _variants() -> int:
+    return max(1, settings.int_value("QUESTIONGEN_VARIANTS") or config.QUESTIONGEN_VARIANTS)
 
 
 def _sources() -> list[str]:
@@ -90,14 +96,14 @@ def _parse_questions(raw: str) -> list[str]:
     return result
 
 
-def _ask_questions(system: str, user: str) -> list[str]:
+def _ask_questions(system: str, user: str, temperature: float = 0.4) -> list[str]:
     completion = _client().chat.completions.create(
         model=settings.value("LLM_MODEL", config.LLM_MODEL),
         messages=[
             {"role": "system", "content": system},
             {"role": "user", "content": user},
         ],
-        temperature=0.4,
+        temperature=temperature,
     )
     return _parse_questions(completion.choices[0].message.content or "")
 
@@ -139,37 +145,42 @@ def _doc_samples(count: int) -> list[dict]:
         text = _point_chunk(source, chunk)
         if len(text) < 80:
             continue
-        samples.append({"source": source, "text": text})
+        samples.append({"source": source, "chunk": chunk, "text": text})
         if len(samples) >= count:
             break
     return samples
 
 
-def _from_docs(count: int) -> list[str]:
+def _from_docs(count: int, variants: int) -> list[dict]:
     samples = _doc_samples(min(count, 12))
-    questions: list[str] = []
-    for start in range(0, len(samples), 3):
-        batch = samples[start:start + 3]
-        if not batch:
+    items: list[dict] = []
+    for sample in samples:
+        if len(items) >= count:
             break
-        blocks = [
-            f"Фрагмент {index + 1} (документ: {item['source']}):\n{item['text']}"
-            for index, item in enumerate(batch)
-        ]
         user = (
-            "Составь до 4 проверочных вопросов по этим фрагментам:\n\n"
-            + "\n\n".join(blocks)
+            f"Фрагмент документации (документ: {sample['source']}):\n{sample['text']}\n\n"
+            f"Составь до {variants} проверочных вопросов об одном и том же по-разному."
         )
         try:
-            questions.extend(_ask_questions(DOC_SYSTEM, user))
+            questions = _ask_questions(DOC_SYSTEM, user, temperature=0.6)
         except Exception:
             continue
-        if len(questions) >= count:
-            break
-    return questions[:count]
+        for index, question in enumerate(questions[:variants]):
+            items.append(
+                {
+                    "question": question,
+                    "source": "docs",
+                    "doc_source": sample["source"],
+                    "doc_chunk": sample["chunk"],
+                    "variant": index,
+                }
+            )
+            if len(items) >= count:
+                break
+    return items
 
 
-def _from_topics(count: int) -> list[str]:
+def _from_topics(count: int) -> list[dict]:
     topics = appdb.list_topics()
     if not topics:
         return []
@@ -182,20 +193,21 @@ def _from_topics(count: int) -> list[str]:
         return []
     user = "Темы вопросов:\n" + "\n".join(lines) + f"\n\nСоставь до {count} вопросов."
     try:
-        return _ask_questions(TOPIC_SYSTEM, user)[:count]
+        questions = _ask_questions(TOPIC_SYSTEM, user)[:count]
     except Exception:
-        return [topic.get("representative", "") for topic in topics[:count] if topic.get("representative")]
+        questions = [topic.get("representative", "") for topic in topics[:count] if topic.get("representative")]
+    return [{"question": question, "source": "topics"} for question in questions if question]
 
 
-def _from_domain(count: int) -> list[str]:
+def _from_domain(count: int) -> list[dict]:
     domain = domains.current()
     seeds = [q for q in domains.sample_questions() if q]
     if len(seeds) >= count:
-        return seeds[:count]
+        return [{"question": question, "source": "domain"} for question in seeds[:count]]
     categories = domains.question_categories()
     terms = domains.terminology()
     if not categories and not terms:
-        return seeds
+        return [{"question": question, "source": "domain"} for question in seeds]
     user = (
         f"Сфера деятельности: {domain.get('title', '')}.\n"
         f"Категории вопросов: {', '.join(categories) or '—'}.\n"
@@ -207,64 +219,83 @@ def _from_domain(count: int) -> list[str]:
     except Exception:
         generated = []
     result = seeds + [q for q in generated if q]
-    return result[:count]
+    return [{"question": question, "source": "domain"} for question in result[:count]]
 
 
 def _existing_questions() -> set[str]:
     known: set[str] = set()
     for row in appdb.recent_requests(1000):
-        question = (row.get("question") or "").strip().lower()
+        question = appdb.normalize_question(row.get("question") or "")
         if question:
             known.add(question)
     for topic in appdb.list_topics():
-        text = (topic.get("representative") or topic.get("title") or "").strip().lower()
+        text = appdb.normalize_question(topic.get("representative") or topic.get("title") or "")
         if text:
             known.add(text)
     for item in appdb.list_corrections():
-        question = (item.get("question") or "").strip().lower()
+        question = appdb.normalize_question(item.get("question") or "")
         if question:
             known.add(question)
     return known
 
 
 def generate(count: int | None = None, sources: list[str] | None = None) -> list[dict]:
-    """Сгенерировать вопросы. Возвращает список {question, source} без дублей."""
+    """Сгенерировать вопросы и запомнить их. Без точных дублей."""
     count = count or _count()
     sources = sources or _sources()
-    known = _existing_questions()
+    variants = _variants()
+    known = _existing_questions() | appdb.existing_generated_norms()
     collected: list[dict] = []
     seen: set[str] = set()
 
-    def add(question: str, source: str) -> None:
-        text = (question or "").strip()
+    def add(item: dict) -> None:
+        text = (item.get("question") or "").strip()
         if len(text) < 8:
             return
-        key = text.lower()
-        if key in known or key in seen:
+        key = appdb.normalize_question(text)
+        if not key or key in known or key in seen:
+            return
+        row = appdb.save_generated_question(
+            text,
+            item.get("source", "docs"),
+            item.get("doc_source", ""),
+            item.get("doc_chunk"),
+            int(item.get("variant", 0)),
+        )
+        if not row:
             return
         seen.add(key)
-        collected.append({"question": text, "source": source})
+        collected.append(
+            {
+                "question": text,
+                "source": item.get("source", "docs"),
+                "doc_source": row.get("doc_source", ""),
+                "doc_chunk": row.get("doc_chunk"),
+                "generated_id": int(row["id"]),
+            }
+        )
 
     for source in sources:
         if len(collected) >= count:
             break
         remaining = count - len(collected)
         if source == "docs":
-            generated = _from_docs(remaining)
+            generated = _from_docs(remaining, variants)
         elif source == "topics":
             generated = _from_topics(remaining)
         elif source == "domain":
             generated = _from_domain(remaining)
         else:
             generated = []
-        for question in generated:
-            add(question, source)
+        for item in generated:
+            add(item)
             if len(collected) >= count:
                 break
     return collected
 
 
-def _run_question(question: str) -> dict:
+def _run_question(item: dict) -> dict:
+    question = item["question"] if isinstance(item, dict) else str(item)
     started = time.time()
     answer = rag.ask(question)
     latency_ms = int((time.time() - started) * 1000)
@@ -280,12 +311,17 @@ def _run_question(question: str) -> dict:
         origin=ORIGIN,
     )
     info = autolearn.evaluate_request(request_id) or {}
+    verdict = info.get("verdict", "unknown")
+    qid = item.get("generated_id") if isinstance(item, dict) else None
+    if qid:
+        appdb.update_generated_result(int(qid), request_id, verdict)
     return {
         "request_id": request_id,
+        "generated_id": qid,
         "question": question,
         "grounded": bool(answer.grounded),
         "sources": len(answer.chunks),
-        "verdict": info.get("verdict", "unknown"),
+        "verdict": verdict,
     }
 
 
@@ -297,12 +333,14 @@ def run(questions: list[dict], progress=None) -> dict:
         if progress:
             progress(f"Прогон вопроса {index + 1} из {len(questions)}")
         try:
-            row = _run_question(question)
+            row = _run_question(item)
             row["source"] = item.get("source", "") if isinstance(item, dict) else ""
+            row["doc_source"] = item.get("doc_source", "") if isinstance(item, dict) else ""
             report.append(row)
         except Exception as exc:
             report.append({
                 "request_id": None,
+                "generated_id": item.get("generated_id") if isinstance(item, dict) else None,
                 "question": question,
                 "grounded": False,
                 "sources": 0,
@@ -334,7 +372,14 @@ def report(limit: int = 100, offset: int = 0) -> dict:
 def summary() -> dict:
     total = appdb.count_request_evals(origin=ORIGIN)
     problems = appdb.count_request_evals(only_problems=True, origin=ORIGIN)
-    return {"generated": total, "problems": problems}
+    memory = appdb.generated_similarity_summary()
+    return {
+        "generated": total,
+        "problems": problems,
+        "remembered": memory["total"],
+        "clusters": memory["clusters"],
+        "duplicates": memory["duplicates"],
+    }
 
 
 class GenerateJob:
@@ -402,6 +447,8 @@ class GenerateJob:
                         errors += 1
                 result["judged"] = judged
                 result["judge_errors"] = errors
+            self._update(stage="Анализ схожести вопросов")
+            result["similarity"] = autolearn.analyze_generated_similarity()
             result["summary"] = summary()
             self._update(status="done", stage="Готово", finished_at=appdb.now(), result=result)
         except Exception as exc:

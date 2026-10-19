@@ -219,6 +219,92 @@ def _fragments(question: str, limit: int = 4) -> str:
     return "\n\n".join(blocks)
 
 
+def _sim_threshold() -> float:
+    return settings.float_value("QUESTIONGEN_SIM_THRESHOLD") or config.QUESTIONGEN_SIM_THRESHOLD
+
+
+def _dedup_threshold() -> float:
+    return settings.float_value("QUESTIONGEN_DEDUP_THRESHOLD") or config.QUESTIONGEN_DEDUP_THRESHOLD
+
+
+def _sim_limit() -> int:
+    return settings.int_value("QUESTIONGEN_SIM_LIMIT") or config.QUESTIONGEN_SIM_LIMIT
+
+
+def analyze_generated_similarity(
+    threshold: float | None = None,
+    dedup: float | None = None,
+    limit: int | None = None,
+) -> dict:
+    """Сгруппировать запомненные вопросы по схожести и пометить почти-дубли.
+
+    Каждому вопросу присваивается кластер похожих формулировок; если схожесть с
+    «головой» кластера выше порога дубля, вопрос помечается как почти-дубль.
+    Векторы кэшируются в БД, чтобы повторный анализ не считал эмбеддинги заново.
+    """
+    threshold = threshold if threshold is not None else _sim_threshold()
+    dedup = dedup if dedup is not None else _dedup_threshold()
+    limit = limit or _sim_limit()
+    rows = appdb.generated_vectors(limit)
+    if not rows:
+        return {"analyzed": 0, "total": 0, "clusters": 0, "duplicates": 0}
+    vectors: dict[int, np.ndarray] = {}
+    for row in rows:
+        qid = int(row["id"])
+        blob = row.get("vector")
+        if blob:
+            vec = np.frombuffer(blob, dtype=np.float32)
+        else:
+            try:
+                vec = np.asarray(vs.embed_query(row["question"]), dtype=np.float32)
+            except Exception:
+                continue
+            vec = vec.astype(np.float32)
+            appdb.store_generated_vector(qid, vec.tobytes())
+        norm = float(np.linalg.norm(vec))
+        if norm == 0:
+            continue
+        vectors[qid] = vec / norm
+
+    order = [int(row["id"]) for row in rows if int(row["id"]) in vectors]
+    clusters: list[dict] = []
+    assignments: list[dict] = []
+    for qid in order:
+        vec = vectors[qid]
+        best = None
+        best_score = -1.0
+        for cluster in clusters:
+            score = float(np.dot(vec, cluster["centroid"]))
+            if score > best_score:
+                best_score = score
+                best = cluster
+        if best is not None and best_score >= threshold:
+            count = best["n"]
+            centroid = (best["centroid"] * count + vec) / (count + 1)
+            length = float(np.linalg.norm(centroid))
+            best["centroid"] = centroid / length if length else centroid
+            best["n"] = count + 1
+            cluster_id = int(best["cluster_id"])
+            duplicate_of = int(best["head"]) if best_score >= dedup else None
+        else:
+            cluster_id = len(clusters) + 1
+            clusters.append({"cluster_id": cluster_id, "centroid": vec, "n": 1, "head": qid})
+            best_score = 1.0
+            duplicate_of = None
+        assignments.append(
+            {
+                "id": qid,
+                "cluster_id": cluster_id,
+                "duplicate_of": duplicate_of,
+                "similarity": float(best_score),
+            }
+        )
+    appdb.set_generated_similarity(assignments)
+    summary = appdb.generated_similarity_summary()
+    return {"analyzed": len(assignments), **summary}
+
+
+
 def _parse_json(raw: str) -> dict:
     text = (raw or "").strip()
     match = re.search(r"\{.*\}", text, re.DOTALL)
@@ -356,6 +442,7 @@ def summary() -> dict:
         "issues": appdb.issue_summary(),
         "topics": len(appdb.list_topics()),
         "candidates": len(candidates),
+        "questions": appdb.generated_similarity_summary(),
     }
 
 
@@ -398,6 +485,9 @@ def refresh(llm: bool | None = None, progress=None) -> dict:
         if progress:
             progress("Сбор уроков-кандидатов")
         result["candidates"] = len(generate_candidates())
+    if progress:
+        progress("Анализ схожести вопросов")
+    result["similarity"] = analyze_generated_similarity()
     result["problems"] = appdb.eval_summary()["problems"]
     result["open_issues"] = appdb.issue_summary()["open"]
     return result

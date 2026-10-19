@@ -359,6 +359,47 @@ def questiongen_report(
     return data
 
 
+@router.get("/questiongen/generated")
+def questiongen_generated(
+    offset: int = 0,
+    limit: int = 30,
+    source: str | None = None,
+    duplicates: bool = False,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    """Память вопросов автообучения: что сгенерировано и как похоже."""
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+    return {
+        "items": appdb.list_generated_questions(
+            limit=limit, offset=offset, source=source or None, only_duplicates=duplicates
+        ),
+        "total": appdb.count_generated_questions(source=source or None, only_duplicates=duplicates),
+        "limit": limit,
+        "offset": offset,
+        "summary": appdb.generated_similarity_summary(),
+    }
+
+
+@router.get("/questiongen/clusters")
+def questiongen_clusters(
+    limit: int = 50,
+    user: dict = Depends(auth.require_admin),
+) -> dict:
+    """Группы похожих вопросов (переформулировки одного смысла)."""
+    limit = max(1, min(limit, 200))
+    return {
+        "clusters": appdb.generated_clusters(limit=limit),
+        "summary": appdb.generated_similarity_summary(),
+    }
+
+
+@router.post("/questiongen/similarity")
+def questiongen_similarity(user: dict = Depends(auth.require_admin)) -> dict:
+    """Пересчитать схожесть запомненных вопросов и пометить почти-дубли."""
+    return autolearn.analyze_generated_similarity()
+
+
 class BootstrapRun(BaseModel):
     cycles: int | None = Field(default=None, ge=1, le=10)
     count: int | None = Field(default=None, ge=1, le=200)

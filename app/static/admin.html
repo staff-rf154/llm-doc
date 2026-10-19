@@ -441,6 +441,29 @@
     </div>
 
     <div class="card">
+      <h2>Память вопросов и схожесть</h2>
+      <div class="muted" style="margin-bottom:10px">
+        Автообучение запоминает все сгенерированные вопросы и группирует близкие
+        формулировки — разные наклонения и формы одного смысла. Почти-дубли помечаются,
+        чтобы один и тот же факт не проверялся повторно.
+      </div>
+      <div class="row">
+        <button class="primary" id="genq-refresh">Пересчитать схожесть</button>
+        <label class="muted"><input id="genq-dup" type="checkbox"> только дубликаты</label>
+        <span class="muted" id="genq-state">—</span>
+      </div>
+      <div class="row" id="genq-metrics"></div>
+      <div class="muted" id="genq-clusters-head" style="margin-top:8px"></div>
+      <div id="genq-clusters"></div>
+      <div class="muted" id="genq-list-head" style="margin-top:12px">Запомненные вопросы:</div>
+      <table id="genq-table">
+        <thead><tr><th>#</th><th>Вопрос</th><th>Источник</th><th>Документ</th><th>Схожесть</th><th>Дубль</th></tr></thead>
+        <tbody></tbody>
+      </table>
+      <div class="row" id="genq-pager"></div>
+    </div>
+
+    <div class="card">
       <h2>Уроки-кандидаты</h2>
       <div class="muted" style="margin-bottom:10px">
         Собраны из проблемных тем. Проверьте текст и одобрите — только после этого урок
@@ -813,7 +836,7 @@ function loadTab(tab) {
   if (tab === 'corrections') loadCorrections();
   if (tab === 'synonyms') loadSynonyms();
   if (tab === 'train') { loadLessons(); loadTraining(); }
-  if (tab === 'autolearn') { loadAutolearn(); loadQuestionGen(); loadBootstrap(); }
+  if (tab === 'autolearn') { loadAutolearn(); loadQuestionGen(); loadGeneratedQuestions(); loadBootstrap(); }
   if (tab === 'settings') { loadSettings(); loadCapabilities(); loadEval(); if (currentUser && currentUser.role === 'system') loadDomain(); }
   if (tab === 'domains') loadDomains();
   if (tab === 'models') loadModels();
@@ -3116,6 +3139,83 @@ document.getElementById('qg-run').addEventListener('click', async () => {
     loadQuestionGen();
   } catch (err) { stateEl.textContent = 'ошибка: ' + err.message; }
 });
+
+let genqPage = 1;
+const genqLimit = 30;
+
+async function loadGeneratedQuestions() {
+  const dup = document.getElementById('genq-dup').checked;
+  const data = await j('/api/admin/questiongen/generated?limit=' + genqLimit + '&offset=' + ((genqPage - 1) * genqLimit) + (dup ? '&duplicates=true' : ''));
+  const summary = data.summary || {};
+  const box = document.getElementById('genq-metrics');
+  while (box.firstChild) box.removeChild(box.firstChild);
+  [
+    ['Запомнено вопросов', summary.total || 0],
+    ['Групп похожих', summary.clusters || 0],
+    ['Почти-дублей', summary.duplicates || 0]
+  ].forEach(pair => box.appendChild(el('span', { className: 'muted', textContent: pair[0] + ': ' + pair[1] })));
+  renderGeneratedQuestions(data.items || [], data.total || 0);
+  await loadGeneratedClusters();
+}
+
+async function loadGeneratedClusters() {
+  const data = await j('/api/admin/questiongen/clusters?limit=30');
+  const box = document.getElementById('genq-clusters');
+  while (box.firstChild) box.removeChild(box.firstChild);
+  const clusters = data.clusters || [];
+  document.getElementById('genq-clusters-head').textContent = clusters.length
+    ? 'Группы похожих вопросов (переформулировки):'
+    : '';
+  clusters.forEach(cluster => {
+    const details = el('details', { className: 'card collapsible' });
+    details.appendChild(el('summary', {}, [el('span', { textContent: '×' + cluster.total + ' · ' + cluster.representative })]));
+    const list = el('div', { className: 'card-body' });
+    (cluster.members || []).forEach(member => {
+      list.appendChild(el('div', { className: 'muted', textContent: (member.duplicate_of ? '≈ дубль: ' : '• ') + member.question }));
+    });
+    details.appendChild(list);
+    box.appendChild(details);
+  });
+}
+
+function renderGeneratedQuestions(items, total) {
+  const body = document.querySelector('#genq-table tbody');
+  while (body.firstChild) body.removeChild(body.firstChild);
+  if (!items.length) {
+    body.appendChild(el('tr', {}, [el('td', { colSpan: 6, className: 'muted', textContent: 'Пока пусто — сгенерируйте вопросы.' })]));
+  }
+  items.forEach(item => {
+    body.appendChild(el('tr', {}, [
+      el('td', { textContent: '#' + item.id }),
+      el('td', { textContent: item.question || '' }),
+      el('td', { textContent: item.source || '' }),
+      el('td', { className: 'muted', textContent: item.doc_source || '' }),
+      el('td', { textContent: item.similarity ? Number(item.similarity).toFixed(2) : '—' }),
+      el('td', { className: 'muted', textContent: item.duplicate_of ? ('≈ #' + item.duplicate_of) : '—' })
+    ]));
+  });
+  const pager = document.getElementById('genq-pager');
+  while (pager.firstChild) pager.removeChild(pager.firstChild);
+  const pages = Math.max(1, Math.ceil(total / genqLimit));
+  pager.appendChild(el('button', { textContent: 'Назад', disabled: genqPage === 1,
+    onclick: () => { genqPage -= 1; loadGeneratedQuestions(); } }));
+  pager.appendChild(el('span', { className: 'muted', textContent: 'Страница ' + genqPage + ' из ' + pages + ' (всего ' + total + ')' }));
+  pager.appendChild(el('button', { textContent: 'Вперёд', disabled: genqPage === pages,
+    onclick: () => { genqPage += 1; loadGeneratedQuestions(); } }));
+}
+
+document.getElementById('genq-refresh').addEventListener('click', async () => {
+  const stateEl = document.getElementById('genq-state');
+  try {
+    stateEl.textContent = 'считаю…';
+    await j('/api/admin/questiongen/similarity', { method: 'POST' });
+    stateEl.textContent = 'готово';
+    genqPage = 1;
+    await loadGeneratedQuestions();
+  } catch (err) { stateEl.textContent = 'ошибка: ' + err.message; }
+});
+
+document.getElementById('genq-dup').addEventListener('change', () => { genqPage = 1; loadGeneratedQuestions(); });
 
 let bsInit = false;
 let bsTimer = null;
