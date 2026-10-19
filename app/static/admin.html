@@ -1,4 +1,7 @@
-<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Админка</title></head><body>
+<!DOCTYPE html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Админка</title>
+<link rel="stylesheet" href="/static/admin.css">
+</head><body>
+<header><strong>Админка RAG</strong><div class="row" style="margin-left:auto"><button id="back">На главную</button><button id="logout">Выход</button></div></header>
 <nav>
   <button data-tab="overview" class="active">Обзор</button>
   <button data-tab="users">Пользователи</button>
@@ -14,18 +17,18 @@
   <button data-tab="index">Индексация</button>
 </nav>
 <main>
-  <section id="tab-overview" class="tab">1</section>
-  <section id="tab-users" class="tab hidden">2</section>
-  <section id="tab-requests" class="tab hidden">3</section>
-  <section id="tab-corrections" class="tab hidden">4</section>
-  <section id="tab-synonyms" class="tab hidden">5</section>
-  <section id="tab-train" class="tab hidden">6</section>
-  <section id="tab-autolearn" class="tab hidden">7</section>
-  <section id="tab-settings" class="tab hidden">8</section>
-  <section id="tab-domains" class="tab hidden">9</section>
-  <section id="tab-docs" class="tab hidden">10</section>
-  <section id="tab-models" class="tab hidden">11</section>
-  <section id="tab-index" class="tab hidden">12</section>
+  <section id="tab-overview" class="tab"></section>
+  <section id="tab-users" class="tab hidden"></section>
+  <section id="tab-requests" class="tab hidden"></section>
+  <section id="tab-corrections" class="tab hidden"></section>
+  <section id="tab-synonyms" class="tab hidden"></section>
+  <section id="tab-train" class="tab hidden"></section>
+  <section id="tab-autolearn" class="tab hidden"></section>
+  <section id="tab-settings" class="tab hidden"></section>
+  <section id="tab-domains" class="tab hidden"></section>
+  <section id="tab-docs" class="tab hidden"></section>
+  <section id="tab-models" class="tab hidden"></section>
+  <section id="tab-index" class="tab hidden"></section>
 </main>
 <script>
 const state = { reqFilter: '', reqSearch: '', reqUser: '', reqSort: 'date', reqOrder: 'desc' };
@@ -2502,4 +2505,6 @@ document.getElementById('idx-dbreset').addEventListener('click', async () => {
   const v = prompt('Введите DELETE для подтверждения удаления БД индексации и индекса');
   if (!v || v.trim().toUpperCase() !== 'DELETE') { alert('Отменено'); return; }
   try { await j('/api/admin/index/db-reset', { method: 'POST', body: JSON.stringify({ confirm: 'DELETE' }) }); alert('Индекс и БД очищены'); loadIndex(); } catch (e) { alert(e.message); }
-});</script></body></html>
+});
+</script>
+</body></html>
