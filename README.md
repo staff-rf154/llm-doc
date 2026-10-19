@@ -46,6 +46,7 @@
 
 - Архитектура: микросервисная (FastAPI + Qdrant + Ollama + SQLite). Контейнеризация через Docker Compose.
 - Векторизация: sentence-transformers `multilingual-e5-base` (embeddings), поддержка гибридного поиска (dense + BM25) и переранжирования cross-encoder.
+- Чанкинг: классический RecursiveCharacterTextSplitter (flat chunks). Parent-Child чанкинг не применяется в текущей версии.
 - Хранение: SQLite (пользователи, настройки, запросы, доменные профили), Qdrant (векторный индекс).
 - Безопасность: сессии cookie, роли `user/admin/system`, скрытый системный пользователь.
 - Масштабируемость: асинхронное индексирование, батчи эмбеддингов, параллельная обработка.
