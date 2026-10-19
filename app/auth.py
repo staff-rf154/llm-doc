@@ -42,8 +42,15 @@ def require_user(user: dict = Depends(current_user)) -> dict:
 
 
 def require_admin(user: dict = Depends(require_user)) -> dict:
-    if user.get("role") != "admin":
+    if user.get("role") not in ("admin", "system"):
         raise HTTPException(status_code=403, detail="Недостаточно прав")
+    return user
+
+
+def require_system(user: dict = Depends(require_user)) -> dict:
+    """Доступ только к системному пользователю: сферы деятельности и модели."""
+    if user.get("role") != "system":
+        raise HTTPException(status_code=403, detail="Недоступно для вашей роли")
     return user
 
 

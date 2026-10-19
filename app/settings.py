@@ -47,7 +47,6 @@ GENERATION = "Генерация"
 RETRIEVAL = "Поиск и чанкинг"
 BEHAVIOUR = "Поведение ответа"
 INGEST = "Индексация"
-IMAGES = "Изображения из документации"
 WEBSITES = "Сайты и обход"
 LESSONS = "Обучение"
 HYBRID = "Гибридный поиск"
@@ -117,11 +116,6 @@ PARAMS: list[Param] = [
     Param("RERANKER_DEVICE", "Устройство reranker'а", group=RERANK,
           options=["auto", "cpu", "cuda"],
           hint="auto — GPU при наличии CUDA, иначе CPU"),
-    Param("PLATFORM_AWARE", "Учитывать Windows и Linux", "bool", group=RETRIEVAL,
-          hint="Догружать фрагменты документа для другой ОС, если ОС не указана в вопросе"),
-    Param("PLATFORM_EXTRA_CHUNKS", "Фрагментов второй ОС", "int", group=RETRIEVAL,
-          hint="Сколько фрагментов докачивать из парного документа"),
-    Param("PLATFORM_MAX_EXTRA", "Всего фрагментов второй ОС", "int", group=RETRIEVAL),
     Param("SSE_HEARTBEAT", "Пауза между ping в чате, сек", "int", group=GENERATION,
           hint="Служебная строка в потоке ответа, чтобы соединение не рвалось"),
     Param("UPLOAD_MAX_MB", "Максимум МБ для файла", "int", group=UPLOADS,
@@ -148,19 +142,6 @@ PARAMS: list[Param] = [
     Param("WEB_CRAWL_RESPECT_ROBOTS", "Уважать robots.txt", "bool", group=WEBSITES,
           hint="Отключать только для доверенных сайтов"),
     Param("WEB_CRAWL_USER_AGENT", "User-Agent обхода", group=WEBSITES),
-    Param("IMAGE_SEARCH_ENABLED", "Искать изображения в ответах", "bool", group=IMAGES,
-          hint="Прикладывать найденные иллюстрации из документации к ответу"),
-    Param("IMAGE_MATCH_THRESHOLD", "Порог релевантности изображения", "float", group=IMAGES,
-          hint="Ниже порога картинка не показывается. Для e5 обычно 0.7–0.8"),
-    Param("IMAGE_MAX", "Максимум изображений в ответе", "int", group=IMAGES),
-    Param("IMAGE_MIN_SIDE", "Минимальный размер изображения, px", "int", group=IMAGES,
-          hint="Мелкие иконки, тайлы и разделители отбрасываются"),
-    Param("IMAGE_PER_PAGE", "Изображений с одной страницы", "int", group=IMAGES,
-          hint="Сколько самых крупных картинок берётся с каждой страницы PDF перед отбором по документу"),
-    Param("IMAGE_PER_DOC", "Изображений в документе", "int", group=IMAGES,
-          hint="Берутся самые крупные изображения документа"),
-    Param("IMAGE_SKIP_FULLPAGE", "Доля площади страницы для фоновых картинок", "float", group=IMAGES,
-          hint="Картинки крупнее этой доли страницы считаются фоном и пропускаются"),
     Param("AUTOLEARN_WINDOW", "Запросов в окне анализа", "int", group=AUTOLEARN,
           hint="Сколько последних запросов пользователей оценивается автоматически"),
     Param("AUTOLEARN_DAYS", "Окно анализа, дней", "int", group=AUTOLEARN,
@@ -194,7 +175,6 @@ PARAMS: list[Param] = [
     Param("PROMPTS_CACHE_TTL", "Кэш стартовых промтов, сек", "int", group=BEHAVIOUR),
     Param("DOCS_BASE_URL", "Базовый адрес документации", group=WEBSITES,
           hint="Префикс ссылок на документы в ответах, если ссылка не задана отдельно"),
-    Param("IMAGES_COLLECTION", "Коллекция изображений", group=IMAGES),
     Param("LOGS_MAX_CHARS", "Символов логов в ответе", "int", group=LOGS,
           hint="Сколько символов выдержек из логов отдавать модели, остальное отбрасывается"),
     Param("LOGS_CONTEXT_LINES", "Строк контекста вокруг ошибки", "int", group=LOGS,
@@ -206,14 +186,12 @@ PARAMS: list[Param] = [
     Param("QDRANT_API_KEY", "Ключ Qdrant", group=INFRA, secret=True, editable=False),
     Param("INDEX_STATE_DB", "База состояния индексации", group=INFRA, editable=False),
     Param("DOCS_DIR", "Каталог документации", group=INFRA, editable=False),
-    Param("EXTRACTED_DIR", "Каталог извлечённого текста", group=INFRA, editable=False),
     Param("UPLOADS_DIR", "Каталог загрузок", group=INFRA, editable=False),
     Param("EVAL_DIR", "Каталог оценок", group=INFRA, editable=False),
     Param("LOGS_ROOT", "Корень логов (только чтение)", group=INFRA, editable=False),
     Param("LOGS_MAX_FILES", "Максимум файлов логов", "int", group=INFRA, editable=False),
     Param("LOGS_MAX_FILE_BYTES", "Максимум размера файла, байт", "int", group=INFRA, editable=False),
     Param("LOGS_MAX_UNPACKED_BYTES", "Максимум распакованного, байт", "int", group=INFRA, editable=False),
-    Param("IMAGES_DIR", "Каталог изображений", group=INFRA, editable=False),
     Param("PROMPTS_DB", "База стартовых промтов", group=INFRA, editable=False),
     Param("SYNONYMS_DB", "База синонимов", group=INFRA, editable=False),
     Param("ADMIN_USERNAME", "Логин администратора по умолчанию", group=INFRA, editable=False),
@@ -226,11 +204,31 @@ CACHE_TTL = 3.0
 
 _lock = threading.Lock()
 _cache: dict = {"at": 0.0, "values": {}}
+_domain_cache: dict = {"at": 0.0, "values": {}}
+
+
+def _domain_values() -> dict[str, str]:
+    """Настройки активной сферы деятельности: имеют приоритет над локальными."""
+    now = time.time()
+    with _lock:
+        if _domain_cache["values"] and now - _domain_cache["at"] < CACHE_TTL:
+            return _domain_cache["values"]
+    values: dict[str, str] = {}
+    try:
+        import domains
+
+        values = domains.active_settings()
+    except Exception:
+        values = {}
+    with _lock:
+        _domain_cache.update(at=now, values=values)
+    return values
 
 
 def invalidate() -> None:
     with _lock:
         _cache.update(at=0.0, values={})
+        _domain_cache.update(at=0.0, values={})
 
 
 def _stored() -> dict[str, str]:
@@ -249,10 +247,19 @@ def _stored() -> dict[str, str]:
 
 
 def raw(key: str) -> str:
+    domain = _domain_values()
+    if key in domain:
+        return domain[key]
     stored = _stored()
     if key in stored:
         return stored[key]
     return ""
+
+
+def local_raw(key: str) -> str:
+    """Только локальное значение (из БД настроек), без настроек сферы."""
+    stored = _stored()
+    return stored.get(key, "")
 
 
 def value(key: str, default: str = "") -> str:
@@ -293,14 +300,23 @@ def bool_value(key: str, default: bool = False) -> bool:
 
 
 def effective(key: str) -> str:
-    """Действующее значение параметра: из БД, иначе из .env."""
-    stored = raw(key)
-    if stored:
-        return stored
+    """Действующее значение параметра: сфера, локальное значение, иначе .env."""
+    value = raw(key)
+    if value:
+        return value
     for param in PARAMS:
         if param.key == key:
             return param.default()
     return ""
+
+
+def source(key: str) -> str:
+    """Источник действующего значения: domain, local или default."""
+    if key in _domain_values():
+        return "domain"
+    if key in _stored():
+        return "local"
+    return "default"
 
 
 def describe() -> list[dict]:
@@ -318,6 +334,8 @@ def describe() -> list[dict]:
                 "requires_reindex": param.requires_reindex,
                 "value": effective(param.key),
                 "default": param.default(),
+                "local": local_raw(param.key),
+                "source": source(param.key),
                 "overridden": bool(raw(param.key)),
             }
         )
@@ -372,9 +390,7 @@ RANGES = {
     "LLM_TEMPERATURE": (0.0, 2.0),
     "CORRECTION_MATCH_THRESHOLD": (0.0, 1.0),
     "AUTOLEARN_TOPIC_THRESHOLD": (0.0, 1.0),
-    "IMAGE_MATCH_THRESHOLD": (0.0, 1.0),
     "LESSONS_MIN_SCORE": (0.0, 1.0),
-    "IMAGE_SKIP_FULLPAGE": (0.0, 1.0),
     "LOGS_MAX_CHARS": (1000, 200000),
     "LOGS_CONTEXT_LINES": (0, 20),
 }
@@ -514,7 +530,6 @@ def groups() -> list[str]:
         LESSONS,
         WEBSITES,
         UPLOADS,
-        IMAGES,
         AUTOLEARN,
         INGEST,
         LOGS,

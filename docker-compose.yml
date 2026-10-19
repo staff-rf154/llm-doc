@@ -78,21 +78,12 @@ services:
       - WEB_CRAWL_TIMEOUT=${WEB_CRAWL_TIMEOUT:-20}
       - WEB_CRAWL_DELAY_MS=${WEB_CRAWL_DELAY_MS:-500}
       - WEB_CRAWL_RESPECT_ROBOTS=${WEB_CRAWL_RESPECT_ROBOTS:-1}
-      - IMAGES_DIR=/data/images
       - LOGS_ROOT=/data/logs
       - LOGS_MAX_CHARS=${LOGS_MAX_CHARS:-16000}
       - LOGS_CONTEXT_LINES=${LOGS_CONTEXT_LINES:-2}
       - LOGS_MAX_FILES=${LOGS_MAX_FILES:-200}
       - LOGS_MAX_FILE_BYTES=${LOGS_MAX_FILE_BYTES:-83886080}
       - LOGS_MAX_UNPACKED_BYTES=${LOGS_MAX_UNPACKED_BYTES:-419430400}
-      - IMAGES_COLLECTION=${IMAGES_COLLECTION:-images}
-      - IMAGE_SEARCH_ENABLED=${IMAGE_SEARCH_ENABLED:-1}
-      - IMAGE_MATCH_THRESHOLD=${IMAGE_MATCH_THRESHOLD:-0.75}
-      - IMAGE_MAX=${IMAGE_MAX:-2}
-      - IMAGE_MIN_SIDE=${IMAGE_MIN_SIDE:-200}
-      - IMAGE_PER_PAGE=${IMAGE_PER_PAGE:-1}
-      - IMAGE_PER_DOC=${IMAGE_PER_DOC:-20}
-      - IMAGE_SKIP_FULLPAGE=${IMAGE_SKIP_FULLPAGE:-0.6}
       - AUTOLEARN_WINDOW=${AUTOLEARN_WINDOW:-500}
       - AUTOLEARN_DAYS=${AUTOLEARN_DAYS:-30}
       - AUTOLEARN_TOPIC_THRESHOLD=${AUTOLEARN_TOPIC_THRESHOLD:-0.84}
@@ -123,16 +114,14 @@ services:
       - LLM_API_KEY=${LLM_API_KEY:-ollama}
       - LLM_MODEL=${LLM_MODEL:-qwen2.5:7b-instruct}
     volumes:
-      - ./data/docs:/data/docs:ro
-      - ./data/extracted:/data/extracted
-      - ./data/uploads:/data/uploads
+      - ./data/docs:/data/docs:rw
+      - ./data/docs/upload:/data/docs/upload
       - ./data/eval:/data/eval
       - ./data/prompts:/data/prompts
       - ./data/index_state:/data/index_state
       - ./data/app:/data/app
       - ./data/settings:/data/settings
       - ./data/synonyms:/data/synonyms
-      - ./data/images:/data/images
       - ./data/logs:/data/logs:ro
       - ./app/.cache:/app/.cache
     ports:

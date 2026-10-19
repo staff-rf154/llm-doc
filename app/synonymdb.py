@@ -114,6 +114,7 @@ def import_many(items: dict[str, list[str]], author: str = "") -> int:
                 """,
                 (_normalize(term), ", ".join(clean), author, now),
             )
+    invalidate()
     return count()
 
 
@@ -124,20 +125,63 @@ def count() -> int:
     return int(row["n"])
 
 
+def export_many() -> dict[str, list[str]]:
+    """Текущий словарь в виде {термин: [синонимы]}."""
+    ensure_schema()
+    with connect() as conn:
+        rows = conn.execute("SELECT term, synonyms FROM synonyms ORDER BY term").fetchall()
+    result: dict[str, list[str]] = {}
+    for row in rows:
+        values = [s for s in row["synonyms"].split(",") if s]
+        if values:
+            result[row["term"]] = values
+    return result
+
+
+def replace_all(items: dict[str, list[str]], author: str = "") -> int:
+    """Полностью заменить словарь указанным набором."""
+    ensure_schema()
+    with _LOCK, connect() as conn:
+        conn.execute("DELETE FROM synonyms")
+    invalidate()
+    if not items:
+        return 0
+    return import_many(items, author)
+
+
 _cache: dict = {"at": 0.0, "map": {}}
+
+
+def _domain_map() -> dict[str, list[str]]:
+    """Синонимы активной сферы деятельности поверх глобального словаря."""
+    try:
+        import domains
+
+        return domains.active_synonyms()
+    except Exception:
+        return {}
 
 
 def _load_map() -> dict[str, list[str]]:
     ensure_schema()
     now = datetime.now().timestamp()
     if _cache["map"] and now - _cache["at"] < config.SYNONYMS_CACHE_TTL:
-        return _cache["map"]
-    mapping: dict[str, list[str]] = {}
-    for row in list_terms():
-        values = [s for s in row["synonyms"].split(",") if s]
-        if values:
-            mapping[row["term"]] = values
-    _cache.update(at=now, map=mapping)
+        base_map = _cache["map"]
+    else:
+        base_map = {}
+        for row in list_terms():
+            values = [s for s in row["synonyms"].split(",") if s]
+            if values:
+                base_map[row["term"]] = values
+        _cache.update(at=now, map=base_map)
+    mapping = dict(base_map)
+    for term, values in _domain_map().items():
+        existing = mapping.get(term) or []
+        merged = list(values)
+        for value in existing:
+            if value not in merged:
+                merged.append(value)
+        mapping[term] = merged
     return mapping
 
 

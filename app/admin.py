@@ -17,7 +17,7 @@ import domains
 import docpages
 import documents as docs_mod
 import evaluation
-import images
+import index_state
 import ingest
 import lessons
 import models
@@ -457,22 +457,22 @@ class ModelKind(BaseModel):
 
 
 @router.get("/models")
-def models_state(user: dict = Depends(auth.require_admin)) -> dict:
+def models_state(user: dict = Depends(auth.require_system)) -> dict:
     return models.summary()
 
 
 @router.post("/models/ollama/pull", status_code=202)
-def models_pull(payload: ModelName, user: dict = Depends(auth.require_admin)) -> dict:
+def models_pull(payload: ModelName, user: dict = Depends(auth.require_system)) -> dict:
     return models.job.start(payload.name)
 
 
 @router.get("/models/ollama/pull")
-def models_pull_state(user: dict = Depends(auth.require_admin)) -> dict:
+def models_pull_state(user: dict = Depends(auth.require_system)) -> dict:
     return models.job.snapshot()
 
 
 @router.delete("/models/ollama")
-def models_ollama_delete(name: str, user: dict = Depends(auth.require_admin)) -> dict:
+def models_ollama_delete(name: str, user: dict = Depends(auth.require_system)) -> dict:
     try:
         return models.ollama_delete(name)
     except Exception as exc:
@@ -480,7 +480,7 @@ def models_ollama_delete(name: str, user: dict = Depends(auth.require_admin)) ->
 
 
 @router.post("/models/ollama/unload")
-def models_ollama_unload(payload: ModelName, user: dict = Depends(auth.require_admin)) -> dict:
+def models_ollama_unload(payload: ModelName, user: dict = Depends(auth.require_system)) -> dict:
     try:
         return models.ollama_unload(payload.name)
     except Exception as exc:
@@ -488,12 +488,12 @@ def models_ollama_unload(payload: ModelName, user: dict = Depends(auth.require_a
 
 
 @router.post("/models/ollama/select")
-def models_ollama_select(payload: ModelName, user: dict = Depends(auth.require_admin)) -> dict:
+def models_ollama_select(payload: ModelName, user: dict = Depends(auth.require_system)) -> dict:
     return models.ollama_select(payload.name)
 
 
 @router.post("/models/hf/download", status_code=202)
-def models_hf_download(payload: ModelKind, user: dict = Depends(auth.require_admin)) -> dict:
+def models_hf_download(payload: ModelKind, user: dict = Depends(auth.require_system)) -> dict:
     try:
         return models.hf_download(payload.kind, payload.name)
     except ValueError as exc:
@@ -503,7 +503,7 @@ def models_hf_download(payload: ModelKind, user: dict = Depends(auth.require_adm
 
 
 @router.post("/models/hf/select")
-def models_hf_select(payload: ModelKind, user: dict = Depends(auth.require_admin)) -> dict:
+def models_hf_select(payload: ModelKind, user: dict = Depends(auth.require_system)) -> dict:
     try:
         return models.hf_select(payload.kind, payload.name)
     except ValueError as exc:
@@ -512,7 +512,7 @@ def models_hf_select(payload: ModelKind, user: dict = Depends(auth.require_admin
 
 @router.delete("/models/hf")
 def models_hf_delete(
-    name: str, kind: str = "", user: dict = Depends(auth.require_admin)
+    name: str, kind: str = "", user: dict = Depends(auth.require_system)
 ) -> dict:
     try:
         return models.hf_delete(kind, name)
@@ -687,41 +687,66 @@ def eval_start(
 @router.get("/docs")
 def docs_list(
     offset: int = 0,
-    limit: int = 20,
+    limit: int = 100,
     q: str = "",
     user: dict = Depends(auth.require_admin),
 ) -> dict:
-    """Файлы документации и их состояние в индексе (с постраничным выводом)."""
+    """Файлы документации (с подпапками) и их состояние в индексе."""
     items = docs_mod.list_documents()
     offset = max(0, offset)
-    limit = max(1, min(limit, 200))
+    limit = max(1, min(limit, 500))
     needle = (q or "").strip().lower()
     if needle:
         items = [item for item in items if needle in item["name"].lower()]
     total = len(items)
     indexed_all = len([item for item in items if item["indexed"]])
-    uploaded_all = len([item for item in items if item["editable"]])
     return {
         "items": items[offset:offset + limit],
+        "folders": docs_mod.list_folders(),
         "total": total,
         "offset": offset,
         "limit": limit,
         "query": q,
         "indexed": indexed_all,
-        "uploaded": uploaded_all,
+        "uploads": config.UPLOADS_DIR,
         "max_mb": settings.int_value("UPLOAD_MAX_MB") or config.UPLOAD_MAX_MB,
-        "formats": list(docs_mod.FILE_EXTENSIONS),
+        "formats": sorted(docs_mod.SUPPORTED),
     }
+
+
+class DocFolder(BaseModel):
+    name: str = Field(min_length=1, max_length=400)
+
+
+@router.post("/docs/folders", status_code=201)
+def docs_folder_create(payload: DocFolder, user: dict = Depends(auth.require_admin)) -> dict:
+    """Создать папку в каталоге документации."""
+    try:
+        return docs_mod.create_folder(payload.name)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.delete("/docs/folders/{name:path}")
+def docs_folder_delete(name: str, user: dict = Depends(auth.require_admin)) -> dict:
+    """Удалить папку вместе с содержимым и точками из индекса."""
+    try:
+        return docs_mod.delete_folder(name)
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.post("/docs/upload", status_code=201)
 async def docs_upload(
     file: UploadFile = File(...),
+    folder: str = "",
     user: dict = Depends(auth.require_admin),
 ) -> dict:
     """Загрузить документ с компьютера администратора."""
     try:
-        saved = docs_mod.save_bytes(file.filename or "", await file.read())
+        saved = docs_mod.save_bytes(file.filename or "", await file.read(), folder)
         indexed = docs_mod.index_document(saved["name"])
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -730,28 +755,33 @@ async def docs_upload(
     return {**saved, **indexed}
 
 
-class DocUrl(BaseModel):
-    url: str = Field(min_length=8, max_length=1000)
+class DocUrls(BaseModel):
+    urls: str = Field(min_length=8, max_length=20000, description="ссылки, по одной на строку")
+    folder: str = ""
 
 
-@router.post("/docs/url", status_code=201)
-def docs_url(payload: DocUrl, user: dict = Depends(auth.require_admin)) -> dict:
-    """Скачать документ по http-ссылке и сразу проиндексировать."""
+@router.post("/docs/urls", status_code=201)
+def docs_urls(payload: DocUrls, user: dict = Depends(auth.require_admin)) -> dict:
+    """Скачать документы по нескольким ссылкам (каждая с новой строки) и проиндексировать.
+
+    Все файлы попадают в каталог загрузок `data/docs/upload` или в указанную папку.
+    """
     try:
-        saved = docs_mod.fetch_url(payload.url)
-        indexed = docs_mod.index_document(saved["name"])
+        result = docs_mod.fetch_urls(payload.urls, payload.folder)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except httpx.HTTPStatusError as exc:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Сервер вернул {exc.response.status_code}",
-        ) from exc
-    except httpx.HTTPError as exc:
-        raise HTTPException(status_code=400, detail=f"Не удалось скачать: {exc}") from exc
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Не удалось скачать: {exc}") from exc
-    return {**saved, **indexed}
+    indexed = 0
+    for item in result["items"]:
+        if not item.get("ok"):
+            continue
+        try:
+            docs_mod.index_document(item["name"])
+            item["indexed"] = True
+            indexed += 1
+        except Exception as exc:
+            item["indexed"] = False
+            item["error"] = str(exc)
+    return {**result, "indexed": indexed}
 
 
 @router.post("/docs/{name:path}/index", status_code=202)
@@ -766,33 +796,26 @@ def docs_index(name: str, user: dict = Depends(auth.require_admin)) -> dict:
 
 
 @router.delete("/docs/{name:path}")
-def docs_delete(
-    name: str,
-    root: str = "",
-    user: dict = Depends(auth.require_admin),
-) -> dict:
-    """Удалить документ: из загрузок — с диска, из документации — из индекса."""
-    if Path(docs_mod.safe_name(name)).suffix.lower() not in docs_mod.FILE_EXTENSIONS:
-        raise HTTPException(status_code=400, detail="Формат файла не поддерживается")
+def docs_delete(name: str, user: dict = Depends(auth.require_admin)) -> dict:
+    """Удалить документ: с диска и из индекса."""
     try:
-        result = docs_mod.delete_document(name, root or None)
+        result = docs_mod.delete_document(name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if not result["removed_file"] and not result["purged_points"] and not result["excluded"]:
+    if not result["removed_file"] and not result["purged_points"]:
         raise HTTPException(status_code=404, detail="Документ не найден")
     return result
 
 
 class DocRestore(BaseModel):
     name: str = Field(min_length=1)
-    root: str = Field(min_length=1)
 
 
 @router.post("/docs/restore", status_code=202)
 def docs_restore(payload: DocRestore, user: dict = Depends(auth.require_admin)) -> dict:
-    """Вернуть исключённый документ в индекс."""
+    """Вернуть документ в индекс."""
     try:
-        return docs_mod.restore_document(payload.name, payload.root)
+        return docs_mod.restore_document(payload.name)
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -1012,21 +1035,6 @@ def verify_reset(user: dict = Depends(auth.require_admin)) -> dict:
     return {"ok": True, "summary": appdb.check_summary()}
 
 
-@router.get("/images")
-def images_status(user: dict = Depends(auth.require_admin)) -> dict:
-    status = images.job.snapshot()
-    client = vs.get_qdrant()
-    status["exists"] = client.collection_exists(images.collection_name())
-    if status["exists"]:
-        status["indexed"] = len(images.indexed_points())
-    return status
-
-
-@router.post("/images/start", status_code=202)
-def images_start(user: dict = Depends(auth.require_admin)) -> dict:
-    return images.job.start()
-
-
 class CapabilitiesUpdate(BaseModel):
     groups: list[dict]
 
@@ -1086,6 +1094,8 @@ class DomainCreate(BaseModel):
     temperature: float | None = Field(default=None, ge=0, le=2)
     allow_inference: bool | None = None
     log_analysis: bool | None = None
+    synonyms: dict[str, list[str]] | None = None
+    settings: dict[str, str] | None = None
 
 
 class DomainUpdate(BaseModel):
@@ -1100,6 +1110,8 @@ class DomainUpdate(BaseModel):
     temperature: float | None = Field(default=None, ge=0, le=2)
     allow_inference: bool | None = None
     log_analysis: bool | None = None
+    synonyms: dict[str, list[str]] | None = None
+    settings: dict[str, str] | None = None
 
 
 def _domain_catalog() -> dict:
@@ -1114,7 +1126,7 @@ def _domain_catalog() -> dict:
 
 
 @router.get("/domain")
-def get_domain(user: dict = Depends(auth.require_admin)) -> dict:
+def get_domain(user: dict = Depends(auth.require_system)) -> dict:
     """Сфера деятельности: активное направление и каталог."""
     return _domain_catalog()
 
@@ -1122,7 +1134,7 @@ def get_domain(user: dict = Depends(auth.require_admin)) -> dict:
 @router.patch("/domain")
 def select_domain(
     payload: DomainSelect,
-    user: dict = Depends(auth.require_admin),
+    user: dict = Depends(auth.require_system),
 ) -> dict:
     """Выбрать сферу деятельности: подставляются её инструкция и настройки."""
     try:
@@ -1135,7 +1147,7 @@ def select_domain(
 
 
 @router.post("/domain/reset")
-def reset_domain(user: dict = Depends(auth.require_admin)) -> dict:
+def reset_domain(user: dict = Depends(auth.require_system)) -> dict:
     domains.reset()
     capabilities_mod.reset_groups()
     return _domain_catalog()
@@ -1144,7 +1156,7 @@ def reset_domain(user: dict = Depends(auth.require_admin)) -> dict:
 @router.post("/domains", status_code=201)
 def create_domain(
     payload: DomainCreate,
-    user: dict = Depends(auth.require_admin),
+    user: dict = Depends(auth.require_system),
 ) -> dict:
     try:
         return domains.create(payload.model_dump(exclude_none=True))
@@ -1156,7 +1168,7 @@ def create_domain(
 def update_domain(
     slug: str,
     payload: DomainUpdate,
-    user: dict = Depends(auth.require_admin),
+    user: dict = Depends(auth.require_system),
 ) -> dict:
     try:
         return domains.update(slug, payload.model_dump(exclude_unset=True))
@@ -1167,7 +1179,7 @@ def update_domain(
 @router.delete("/domains/{slug}")
 def delete_domain(
     slug: str,
-    user: dict = Depends(auth.require_admin),
+    user: dict = Depends(auth.require_system),
 ) -> dict:
     try:
         removed = domains.delete(slug)
@@ -1181,7 +1193,7 @@ def delete_domain(
 @router.post("/domains/{slug}/duplicate", status_code=201)
 def duplicate_domain(
     slug: str,
-    user: dict = Depends(auth.require_admin),
+    user: dict = Depends(auth.require_system),
 ) -> dict:
     try:
         return domains.duplicate(slug)
@@ -1245,3 +1257,33 @@ def index_pause(user: dict = Depends(auth.require_admin)) -> dict:
 @router.post("/index/resume")
 def index_resume(user: dict = Depends(auth.require_admin)) -> dict:
     return ingest.job.start()
+
+
+@router.post("/index/reset")
+def index_reset(user: dict = Depends(auth.require_admin)) -> dict:
+    """Полностью удалить индекс: коллекции Qdrant и состояние индексации."""
+    try:
+        return vs.drop_all_collections()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Не удалось удалить индекс: {exc}") from exc
+
+
+class IndexDbReset(BaseModel):
+    confirm: str = Field(description="введите DELETE для подтверждения")
+
+
+@router.post("/index/db-reset")
+def index_db_reset(payload: IndexDbReset, user: dict = Depends(auth.require_admin)) -> dict:
+    """Удалить базу данных с проиндексированными данными (index.db) и индекс.
+
+    Файлы документации не трогаются: удаляются коллекции Qdrant и журнал
+    состояния индексации.
+    """
+    if payload.confirm.strip().upper() != "DELETE":
+        raise HTTPException(status_code=400, detail="Введите DELETE для подтверждения")
+    try:
+        dropped = vs.drop_all_collections()
+        cleared = index_state.clear_all()
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Не удалось удалить: {exc}") from exc
+    return {**dropped, "index_state_files": cleared}

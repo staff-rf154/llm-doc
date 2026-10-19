@@ -11,8 +11,7 @@ LLM_MAX_TOKENS = int(os.getenv("LLM_MAX_TOKENS", "0"))
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "intfloat/multilingual-e5-base")
 SPARSE_MODEL = os.getenv("SPARSE_MODEL", "Qdrant/bm25")
 DOCS_DIR = os.getenv("DOCS_DIR", "/data/docs")
-EXTRACTED_DIR = os.getenv("EXTRACTED_DIR", "/data/extracted")
-UPLOADS_DIR = os.getenv("UPLOADS_DIR", "/data/uploads")
+UPLOADS_DIR = os.getenv("UPLOADS_DIR", os.path.join(DOCS_DIR, "upload"))
 EVAL_DIR = os.getenv("EVAL_DIR", "/data/eval")
 LOGS_ROOT = os.getenv("LOGS_ROOT", "/data/logs")
 LOGS_MAX_CHARS = int(os.getenv("LOGS_MAX_CHARS", "16000"))
@@ -23,7 +22,7 @@ LOGS_CONTEXT_LINES = int(os.getenv("LOGS_CONTEXT_LINES", "2"))
 PROMPTS_DB = os.getenv("PROMPTS_DB", "/data/prompts/prompts.db")
 PROMPTS_MAX = int(os.getenv("PROMPTS_MAX", "8"))
 
-SOURCE_ROOTS = [DOCS_DIR, EXTRACTED_DIR, UPLOADS_DIR]
+SOURCE_ROOTS = [DOCS_DIR]
 
 UPLOAD_MAX_MB = int(os.getenv("UPLOAD_MAX_MB", "100"))
 UPLOAD_URL_TIMEOUT = int(os.getenv("UPLOAD_URL_TIMEOUT", "60"))
@@ -42,6 +41,8 @@ DOMAIN_PROFILE = os.getenv("DOMAIN_PROFILE", "general")
 DOCS_BASE_URL = os.getenv("DOCS_BASE_URL", "")
 ADMIN_USERNAME = os.getenv("ADMIN_USERNAME", "")
 ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
+SYSTEM_USERNAME = os.getenv("SYSTEM_USERNAME", "system")
+SYSTEM_PASSWORD = os.getenv("SYSTEM_PASSWORD", "")
 SESSION_COOKIE = os.getenv("SESSION_COOKIE", "sid")
 CORRECTIONS_COLLECTION = os.getenv("CORRECTIONS_COLLECTION", "corrections")
 CORRECTION_MATCH_THRESHOLD = float(os.getenv("CORRECTION_MATCH_THRESHOLD", "0.86"))
@@ -51,15 +52,6 @@ SYNONYMS_DB = os.getenv("SYNONYMS_DB", "/data/synonyms/synonyms.db")
 SYNONYMS_CACHE_TTL = int(os.getenv("SYNONYMS_CACHE_TTL", "300"))
 SYNONYMS_SEED_ON_START = os.getenv("SYNONYMS_SEED_ON_START", "1") not in ("0", "false", "False")
 SYNONYMS_MAX_VARIANTS = int(os.getenv("SYNONYMS_MAX_VARIANTS", "6"))
-IMAGES_DIR = os.getenv("IMAGES_DIR", "/data/images")
-IMAGES_COLLECTION = os.getenv("IMAGES_COLLECTION", "images")
-IMAGE_MATCH_THRESHOLD = float(os.getenv("IMAGE_MATCH_THRESHOLD", "0.75"))
-IMAGE_MAX = int(os.getenv("IMAGE_MAX", "2"))
-IMAGE_MIN_SIDE = int(os.getenv("IMAGE_MIN_SIDE", "200"))
-IMAGE_PER_PAGE = int(os.getenv("IMAGE_PER_PAGE", "2"))
-IMAGE_PER_DOC = int(os.getenv("IMAGE_PER_DOC", "20"))
-IMAGE_SKIP_FULLPAGE = float(os.getenv("IMAGE_SKIP_FULLPAGE", "0.6"))
-IMAGE_SEARCH_ENABLED = os.getenv("IMAGE_SEARCH_ENABLED", "1") not in ("0", "false", "False")
 AUTOLEARN_WINDOW = int(os.getenv("AUTOLEARN_WINDOW", "500"))
 AUTOLEARN_DAYS = int(os.getenv("AUTOLEARN_DAYS", "30"))
 AUTOLEARN_TOPIC_THRESHOLD = float(os.getenv("AUTOLEARN_TOPIC_THRESHOLD", "0.84"))
@@ -97,9 +89,6 @@ RERANKER_BATCH = int(os.getenv("RERANKER_BATCH", "8"))
 RERANKER_MAX_LENGTH = int(os.getenv("RERANKER_MAX_LENGTH", "512"))
 EMBEDDER_DEVICE = os.getenv("EMBEDDER_DEVICE", "auto")
 RERANKER_DEVICE = os.getenv("RERANKER_DEVICE", "auto")
-PLATFORM_AWARE = os.getenv("PLATFORM_AWARE", "1") not in ("0", "false", "False")
-PLATFORM_EXTRA_CHUNKS = int(os.getenv("PLATFORM_EXTRA_CHUNKS", "2"))
-PLATFORM_MAX_EXTRA = int(os.getenv("PLATFORM_MAX_EXTRA", "6"))
 INGEST_BATCH_SIZE = int(os.getenv("INGEST_BATCH_SIZE", "64"))
 INGEST_WORKERS = int(os.getenv("INGEST_WORKERS", "8"))
 
@@ -120,8 +109,6 @@ SYSTEM_PROMPT = (
     "откуда взята информация, и рекомендуй ознакомиться с ним подробнее. "
     "В документации часто повторяется одна и та же информация — объединяй повторы "
     "и давай один цельный ответ без дублирования. "
-    "Изображения прикрепляй только из тех источников, откуда взята текстовая "
-    "информация; если подходящих изображений нет — не прикрепляй их. "
     "Если пользователь спрашивает, что ты умеешь, перечисли свои возможности "
     "по текущей сфере деятельности: ответы на вопросы по документации простыми "
     "словами, работа с текстом (написание, редактирование, сокращение, перевод), "

@@ -664,12 +664,22 @@
       </div>
       <div class="row">
         <input type="file" id="doc-file" style="max-width:340px">
+        <select id="doc-upload-folder" style="max-width:220px"></select>
         <button class="primary" id="doc-upload">Загрузить с ПК</button>
         <span class="muted" id="doc-msg"></span>
       </div>
-      <div class="row">
-        <input id="doc-url" placeholder="Прямая ссылка на файл, например https://example.org/manual.pdf" style="max-width:560px">
-        <button id="doc-fetch">Скачать по ссылке</button>
+      <div class="row" style="align-items:flex-start;flex-direction:column;gap:4px">
+        <label class="muted" for="doc-urls">Ссылки на файлы (по одной в строке)</label>
+        <textarea id="doc-urls" rows="3" style="max-width:680px" placeholder="https://example.org/guide.pdf&#10;https://example.org/manual.docx"></textarea>
+        <div class="row"><button id="doc-fetch">Скачать по ссылкам</button><span class="muted" id="doc-urls-msg"></span></div>
+      </div>
+      <div class="row" style="align-items:flex-start;flex-direction:column;gap:4px">
+        <label class="muted">Папки</label>
+        <div class="row">
+          <input id="doc-folder-name" placeholder="Новая папка" style="max-width:220px">
+          <button id="doc-folder-create">Создать папку</button>
+        </div>
+        <div id="doc-tree" style="margin-top:4px"></div>
       </div>
       <div class="row">
         <input id="doc-search" placeholder="Поиск по имени документа" style="max-width:260px">
@@ -733,6 +743,11 @@
       <div id="idx-state"></div>
       <div class="bar"><div id="idx-bar" style="width:0%"></div></div>
       <div class="muted" id="idx-progress"></div>
+      <div class="row" style="margin-top:8px">
+        <button class="danger" id="idx-reset">Удалить индекс (Qdrant)</button>
+        <button class="danger" id="idx-dbreset">Удалить БД и индекс</button>
+        <span class="muted">Удаление БД потребует подтверждения «DELETE»</span>
+      </div>
     </div>
 
     <div class="card" style="margin-top:16px">
@@ -789,14 +804,26 @@ function el(tag, props, children) {
   return node;
 }
 
+function applyNav() {
+  if (currentUser && currentUser.role !== 'system') {
+    document.querySelectorAll('nav button[data-tab="models"], nav button[data-tab="domains"]').forEach(b => b.style.display = 'none');
+  } else {
+    document.querySelectorAll('nav button[data-tab="models"], nav button[data-tab="domains"]').forEach(b => b.style.display = '');
+  }
+}
 document.querySelectorAll('nav button').forEach(btn => {
   btn.addEventListener('click', () => {
+    if (!currentUser) { loadMe().then(applyNav); }
     document.querySelectorAll('nav button').forEach(b => b.classList.remove('active'));
     btn.classList.add('active');
     document.querySelectorAll('.tab').forEach(s => s.classList.add('hidden'));
-    document.getElementById('tab-' + btn.dataset.tab).classList.remove('hidden');
+    const sec = document.getElementById('tab-' + btn.dataset.tab);
+    if (sec) sec.classList.remove('hidden');
+    applyNav();
     loadTab(btn.dataset.tab);
   });
+});
+loadMe().then(applyNav);
 });
 
 function loadTab(tab) {
@@ -820,7 +847,15 @@ document.getElementById('logout').addEventListener('click', async () => {
   location.href = '/';
 });
 
+let currentUser = null;
+async function loadMe() {
+  try {
+    const r = await fetch('/api/user');
+    if (r.ok) { currentUser = await r.json(); }
+  } catch (e) {}
+}
 async function loadOverview() {
+  if (!currentUser) await loadMe();
   const data = await j('/api/admin/stats');
   const s = data.summary;
   const root = document.getElementById('tab-overview');
@@ -1979,7 +2014,9 @@ function renderDomEditor(item) {
     area('Что я умею (строка без «-» — раздел, строки с «- » — пункты)', 'dom-caps', formatCaps(value.capabilities || []), 8),
     area('Категории вопросов (по одной в строке)', 'dom-cats', (value.categories || []).join('\n'), 4),
     area('Терминология (по одному в строке)', 'dom-terms', (value.terminology || []).join('\n'), 4),
-    area('Примеры вопросов (по одному в строке)', 'dom-questions', (value.sample_questions || []).join('\n'), 4)
+    area('Примеры вопросов (по одному в строке)', 'dom-questions', (value.sample_questions || []).join('\n'), 4),
+    area('Синонимы (по одной строке на термин: термин — синоним1, синоним2)', 'dom-synonyms', formatSynonyms(value.synonyms || {}), 6),
+    area('Настройки сферы (ключ=значение, по одной в строке)', 'dom-settings', formatSettings(value.settings || {}), 6)
   ]));
   const actions = el('div', { className: 'row', style: 'margin-top:8px' }, [
     el('button', { className: 'primary', textContent: isNew ? 'Создать' : 'Сохранить', onclick: saveDomain })
@@ -2007,6 +2044,46 @@ function area(label, id, value, rows) {
   ]);
 }
 
+function formatSynonyms(syn) {
+  const lines = [];
+  Object.keys(syn || {}).forEach(term => {
+    const vals = syn[term];
+    const list = Array.isArray(vals) ? vals.join(', ') : String(vals || '');
+    lines.push(term + ' — ' + list);
+  });
+  return lines.join('\n');
+}
+function parseSynonyms(text) {
+  const result = {};
+  (text || '').split('\n').forEach(line => {
+    const clean = line.trim();
+    if (!clean) return;
+    const parts = clean.split(/\s*[—–-]\s*|[:=]/);
+    if (parts.length < 2) return;
+    const term = parts[0].trim().toLowerCase();
+    const vals = parts.slice(1).join(',').split(',').map(s => s.trim()).filter(Boolean);
+    if (term && vals.length) result[term] = vals;
+  });
+  return result;
+}
+function formatSettings(settings) {
+  const lines = [];
+  Object.keys(settings || {}).forEach(k => lines.push(k + '=' + settings[k]));
+  return lines.join('\n');
+}
+function parseSettings(text) {
+  const result = {};
+  (text || '').split('\n').forEach(line => {
+    const clean = line.trim();
+    if (!clean) return;
+    const parts = clean.split('=');
+    if (parts.length < 2) return;
+    const key = parts[0].trim();
+    const val = parts.slice(1).join('=').trim();
+    if (key && val) result[key] = val;
+  });
+  return result;
+}
 function splitLines(text) {
   return (text || '').split('\n').map(s => s.trim()).filter(Boolean);
 }
@@ -2048,6 +2125,8 @@ function readDomainForm() {
     categories: splitLines(document.getElementById('dom-cats').value),
     terminology: splitLines(document.getElementById('dom-terms').value),
     sample_questions: splitLines(document.getElementById('dom-questions').value),
+    synonyms: parseSynonyms(document.getElementById('dom-synonyms').value),
+    settings: parseSettings(document.getElementById('dom-settings').value),
     temperature: document.getElementById('dom-temperature').value.trim() === ''
       ? null : Number(document.getElementById('dom-temperature').value),
     allow_inference: document.getElementById('dom-inference').checked,
@@ -2169,7 +2248,7 @@ function paramRow(item) {
   }, [
     document.createTextNode(item.label),
     item.requires_reindex ? el('span', { className: 'pill down', textContent: 'требует переиндексации' }) : document.createTextNode(''),
-    item.overridden ? el('span', { className: 'pill', textContent: 'из кабинета' }) : document.createTextNode(''),
+    item.source === 'domain' ? el('span', { className: 'pill', textContent: 'из сферы' }) : (item.source === 'local' ? el('span', { className: 'pill', textContent: 'локально' }) : document.createTextNode('')),
     item.editable === false ? el('span', { className: 'pill', textContent: 'только чтение' }) : document.createTextNode('')
   ]);
 
@@ -2365,8 +2444,41 @@ function formatSize(bytes) {
 
 let docPage = 1;
 let docLimit = 20;
+let docFolders = [];
 
+async function loadDocFolders() {
+  try {
+    const data = await j('/api/admin/docs');
+    docFolders = data.folders || [];
+    const sel = document.getElementById('doc-upload-folder');
+    if (sel) {
+      while (sel.firstChild) sel.removeChild(sel.firstChild);
+      sel.appendChild(el('option', { value: '', textContent: '(корневая)' }));
+      docFolders.forEach(f => sel.appendChild(el('option', { value: f.name, textContent: f.name })));
+    }
+    const tree = document.getElementById('doc-tree');
+    if (tree) {
+      while (tree.firstChild) tree.removeChild(tree.firstChild);
+      if (docFolders.length) {
+        const ul = el('div', { style: 'display:flex;flex-wrap:wrap;gap:8px' });
+        docFolders.forEach(f => {
+          ul.appendChild(el('span', { className: 'muted', textContent: '/' + f.name }, [
+          ]));
+          ul.appendChild(el('button', { textContent: 'Удалить', onclick: async () => {
+            if (!confirm('Удалить папку ' + f.name + '? Файлы останутся.')) return;
+            await j('/api/admin/docs/folders/' + encodeURIComponent(f.name), { method: 'DELETE' });
+            await loadDocFolders();
+          } }));
+        });
+        tree.appendChild(ul);
+      } else {
+        tree.appendChild(el('span', { className: 'muted', textContent: 'Папок нет' }));
+      }
+    }
+  } catch (e) {}
+}
 async function loadDocs() {
+  await loadDocFolders();
   const query = document.getElementById('doc-search').value.trim();
   const data = await j('/api/admin/docs?limit=' + docLimit + '&offset=' + ((docPage - 1) * docLimit)
     + '&q=' + encodeURIComponent(query));
@@ -2379,28 +2491,27 @@ async function loadDocs() {
     body.appendChild(el('tr', {}, [el('td', { colSpan: 7, className: 'muted', textContent: 'Ничего не найдено.' })]));
   }
   items.forEach(item => {
-    const actions = [
-      el('button', {
-        textContent: item.excluded ? 'Вернуть в индекс' : 'Переиндексировать',
-        onclick: async () => {
-          const msg = document.getElementById('doc-msg');
-          msg.textContent = 'Индексирую ' + item.name + '…';
-          try {
-            let saved;
-            if (item.editable) {
-              saved = await j('/api/admin/docs/' + encodeURIComponent(item.name) + '/index', { method: 'POST' });
-            } else {
-              saved = await j('/api/admin/docs/restore', {
-                method: 'POST',
-                body: JSON.stringify({ name: item.name, root: item.root })
-              });
-            }
-            msg.textContent = 'Готово: ' + (saved.chunks != null ? saved.chunks + ' фрагментов' : item.name);
-            loadDocs();
-          } catch (err) { msg.textContent = err.message; }
-        }
-      })
-    ];
+    const actions = [];
+    actions.push(el('button', {
+      textContent: item.excluded ? 'Вернуть в индекс' : 'Переиндексировать',
+      onclick: async () => {
+        const msg = document.getElementById('doc-msg');
+        msg.textContent = 'Индексирую ' + item.name + '…';
+        try {
+          let saved;
+          if (item.editable) {
+            saved = await j('/api/admin/docs/' + encodeURIComponent(item.name) + '/index', { method: 'POST' });
+          } else {
+            saved = await j('/api/admin/docs/restore', {
+              method: 'POST',
+              body: JSON.stringify({ name: item.name, root: item.root })
+            });
+          }
+          msg.textContent = 'Готово: ' + (saved.chunks != null ? saved.chunks + ' фрагментов' : item.name);
+          loadDocs();
+        } catch (err) { msg.textContent = err.message; }
+      }
+    }));
     actions.push(el('button', {
       className: 'danger',
       textContent: 'Удалить',
@@ -2419,7 +2530,7 @@ async function loadDocs() {
       }
     }));
     body.appendChild(el('tr', {}, [
-      el('td', { textContent: item.name }),
+      el('td', { textContent: (item.folder ? item.folder + '/' : '') + item.name }),
       el('td', { textContent: item.format }),
       el('td', { textContent: formatSize(item.size) }),
       el('td', { textContent: item.excluded ? 'исключён' : (item.indexed ? String(item.chunks) : 'не в индексе') }),
@@ -2569,16 +2680,24 @@ document.getElementById('doc-upload').addEventListener('click', () => {
   }
   const form = new FormData();
   form.append('file', input.files[0]);
+  const folderSel = document.getElementById('doc-upload-folder');
+  const folder = folderSel ? folderSel.value : '';
+  if (folder) form.append('folder', folder);
   docAction('/api/admin/docs/upload', { method: 'POST', body: form, headers: {} }, document.getElementById('doc-upload'))
     .then(() => { input.value = ''; });
 });
 
-document.getElementById('doc-fetch').addEventListener('click', () => {
-  const input = document.getElementById('doc-url');
-  const url = input.value.trim();
-  if (!url) { document.getElementById('doc-msg').textContent = 'Введите ссылку'; return; }
-  docAction('/api/admin/docs/url', { method: 'POST', body: JSON.stringify({ url }) }, document.getElementById('doc-fetch'))
-    .then(() => { input.value = ''; });
+document.getElementById('doc-fetch').addEventListener('click', async () => {
+  const text = document.getElementById('doc-urls').value;
+  const msg = document.getElementById('doc-urls-msg');
+  if (!text.trim()) { msg.textContent = 'Введите ссылки'; return; }
+  msg.textContent = 'Скачиваю…';
+  try {
+    await j('/api/admin/docs/urls', { method: 'POST', body: JSON.stringify({ urls: text }) });
+    msg.textContent = 'Готово, файлы загружены';
+    document.getElementById('doc-urls').value = '';
+    loadDocs();
+  } catch (err) { msg.textContent = err.message; }
 });
 
 document.getElementById('doc-search').addEventListener('input', () => { docPage = 1; loadDocs(); });
@@ -3124,6 +3243,37 @@ document.getElementById('bs-run').addEventListener('click', async () => {
 
 loadOverview();
 setInterval(loadOverview, 30000);
+document.getElementById('doc-folder-create').addEventListener('click', async () => {
+  const name = document.getElementById('doc-folder-name').value.trim();
+  if (!name) return;
+  try { await j('/api/admin/docs/folders', { method: 'POST', body: JSON.stringify({ name }) }); document.getElementById('doc-folder-name').value=''; loadDocs(); } catch (e) { alert(e.message); }
+});
+
+document.getElementById('idx-reset').addEventListener('click', async () => {
+  if (!confirm('Удалить весь векторный индекс (коллекции Qdrant)? Состояние индексации может быть очищено.')) return;
+  try { await j('/api/admin/index/reset', { method: 'POST' }); alert('Индекс удалён'); loadIndex(); } catch (e) { alert(e.message); }
+});
+document.getElementById('idx-dbreset').addEventListener('click', async () => {
+  const v = prompt('Введите DELETE для подтверждения удаления БД индексации и индекса');
+  if (!v || v.trim().toUpperCase() !== 'DELETE') { alert('Отменено'); return; }
+  try { await j('/api/admin/index/db-reset', { method: 'POST', body: JSON.stringify({ confirm: 'DELETE' }) }); alert('Индекс и БД очищены'); loadIndex(); } catch (e) { alert(e.message); }
+});
 </script>
 </body>
 </html>
+
+document.getElementById('doc-folder-create').addEventListener('click', async () => {
+  const name = document.getElementById('doc-folder-name').value.trim();
+  if (!name) return;
+  try { await j('/api/admin/docs/folders', { method: 'POST', body: JSON.stringify({ name }) }); document.getElementById('doc-folder-name').value=''; loadDocs(); } catch (e) { alert(e.message); }
+});
+
+document.getElementById('idx-reset').addEventListener('click', async () => {
+  if (!confirm('Удалить весь векторный индекс (коллекции Qdrant)? Состояние индексации может быть очищено.')) return;
+  try { await j('/api/admin/index/reset', { method: 'POST' }); alert('Индекс удалён'); loadIndex(); } catch (e) { alert(e.message); }
+});
+document.getElementById('idx-dbreset').addEventListener('click', async () => {
+  const v = prompt('Введите DELETE для подтверждения удаления БД индексации и индекса');
+  if (!v || v.trim().toUpperCase() !== 'DELETE') { alert('Отменено'); return; }
+  try { await j('/api/admin/index/db-reset', { method: 'POST', body: JSON.stringify({ confirm: 'DELETE' }) }); alert('Индекс и БД очищены'); loadIndex(); } catch (e) { alert(e.message); }
+});

@@ -11,6 +11,7 @@ import auth
 import config
 import capabilities as capabilities_mod
 import ingest
+import metrics
 import promptdb
 import prompts
 import rag
@@ -26,6 +27,8 @@ app = FastAPI(
     version="1.0.0",
 )
 
+app.middleware("http")(metrics.middleware)
+
 
 @app.on_event("startup")
 def startup() -> None:
@@ -33,6 +36,10 @@ def startup() -> None:
     created = appdb.ensure_admin()
     if created:
         print(created)
+    system = appdb.ensure_system()
+    if system.get("created"):
+        path = appdb.save_system_password(system["password"])
+        print(f"системный пользователь {system['username']}: пароль сохранён в {path}")
     try:
         import corrections
 
@@ -100,18 +107,6 @@ def app_title() -> str:
         return config.APP_TITLE
 
 
-@app.get("/api/images/{filename}")
-def image_file(filename: str):
-    """Изображение из документации, извлечённое при индексации."""
-    from fastapi.responses import FileResponse
-
-    safe = Path(filename).name
-    path = Path(config.IMAGES_DIR) / safe
-    if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail="Изображение не найдено")
-    return FileResponse(path)
-
-
 @app.get("/api/title")
 def title() -> dict:
     return {"title": app_title()}
@@ -143,7 +138,6 @@ def me(user: dict = Depends(auth.current_user)) -> dict:
 class AskRequest(BaseModel):
     question: str = Field(min_length=2, examples=["Как восстановить доступ к VPN?"])
     top_k: int | None = Field(default=None, ge=1, le=20)
-    show_images: bool = True
 
 
 class RetrieveRequest(BaseModel):
@@ -159,9 +153,17 @@ def health() -> dict:
         "title": app_title(),
         "llm_model": settings.value("LLM_MODEL", config.LLM_MODEL),
         "embedding_model": settings.value("EMBEDDING_MODEL", config.EMBEDDING_MODEL),
-        "image_search": settings.bool_value("IMAGE_SEARCH_ENABLED", config.IMAGE_SEARCH_ENABLED),
         "device": vectorstore.device_info(),
     }
+
+
+@app.get("/metrics")
+def prometheus_metrics() -> Response:
+    """Метрики Prometheus для мониторинга."""
+    return Response(
+        content=metrics.render(),
+        media_type=metrics.CONTENT_TYPE_LATEST,
+    )
 
 
 @app.get("/collection")

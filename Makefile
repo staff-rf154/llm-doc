@@ -1,4 +1,4 @@
-.PHONY: up down build ingest ingest-dry ask evaluate evaluate-ragas logs pull-llm ps clean chm reindex reindex-status reindex-pause reindex-resume prompts synonyms synonyms-expand seed-synonyms super-test
+.PHONY: up down build ingest ingest-dry ask evaluate evaluate-ragas logs pull-llm ps clean reindex reindex-status reindex-pause reindex-resume prompts synonyms synonyms-expand seed-synonyms super-test
 
 up:
 	docker compose up -d --build
@@ -19,13 +19,11 @@ pull-llm:
 	docker compose --profile local-llm up -d ollama
 	docker compose exec ollama ollama pull $(LLM_MODEL)
 
-chm:
-	docker compose run --rm app python chm_extract.py
 
-ingest-dry: chm
+ingest-dry: 
 	docker compose run --rm app python ingest.py --dry-run
 
-ingest: chm
+ingest: 
 	docker compose run --rm app python ingest.py
 
 reindex:
@@ -69,4 +67,4 @@ super-test:
 
 clean:
 	docker compose down -v
-	rm -rf app/.cache qdrant/storage data/extracted
+	rm -rf app/.cache qdrant/storage

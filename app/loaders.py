@@ -1,10 +1,83 @@
+import csv
+import io
+import json
+import re
 import zipfile
 from pathlib import Path
 
 from bs4 import BeautifulSoup
 from pypdf import PdfReader
 
-SUPPORTED = {".pdf", ".docx", ".txt", ".md", ".html", ".htm"}
+TEXT_SUFFIXES = {
+    ".txt", ".md", ".markdown", ".rst", ".log", ".csv", ".tsv", ".json",
+    ".xml", ".yaml", ".yml", ".ini", ".conf", ".cfg", ".properties",
+    ".sql", ".sh", ".bat", ".ps1", ".py", ".js", ".ts", ".java", ".go",
+    ".rs", ".c", ".cpp", ".h", ".hpp", ".cs", ".rb", ".php", ".pl",
+    ".css", ".svg", ".tex", ".srt", ".vtt",
+}
+HTML_SUFFIXES = {".html", ".htm", ".xhtml", ".epub"}
+OFFICE_SUFFIXES = {".docx", ".pptx", ".odt", ".ods", ".odp"}
+TABLE_SUFFIXES = {".xlsx"}
+SUPPORTED = {".pdf"} | TEXT_SUFFIXES | HTML_SUFFIXES | OFFICE_SUFFIXES | TABLE_SUFFIXES
+
+FORMAT_LABELS = {
+    ".pdf": "PDF",
+    ".docx": "DOCX",
+    ".pptx": "PPTX",
+    ".odt": "ODT",
+    ".ods": "ODS",
+    ".odp": "ODP",
+    ".xlsx": "XLSX",
+    ".txt": "TXT",
+    ".md": "Markdown",
+    ".markdown": "Markdown",
+    ".rst": "reStructuredText",
+    ".log": "LOG",
+    ".csv": "CSV",
+    ".tsv": "TSV",
+    ".json": "JSON",
+    ".xml": "XML",
+    ".yaml": "YAML",
+    ".yml": "YAML",
+    ".html": "HTML",
+    ".htm": "HTML",
+    ".xhtml": "HTML",
+    ".epub": "EPUB",
+    ".sql": "SQL",
+    ".sh": "Shell",
+    ".bat": "BAT",
+    ".ps1": "PowerShell",
+    ".py": "Python",
+    ".js": "JavaScript",
+    ".ts": "TypeScript",
+    ".ini": "INI",
+    ".conf": "CONF",
+    ".cfg": "CFG",
+    ".properties": "PROPERTIES",
+    ".svg": "SVG",
+    ".css": "CSS",
+}
+
+
+CONTENT_TYPE_SUFFIXES = {
+    "application/pdf": ".pdf",
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
+    "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
+    "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/vnd.oasis.opendocument.text": ".odt",
+    "application/vnd.oasis.opendocument.spreadsheet": ".ods",
+    "application/vnd.oasis.opendocument.presentation": ".odp",
+    "application/epub+zip": ".epub",
+    "text/plain": ".txt",
+    "text/csv": ".csv",
+    "text/tab-separated-values": ".tsv",
+    "text/markdown": ".md",
+    "application/json": ".json",
+    "application/xml": ".xml",
+    "text/xml": ".xml",
+    "text/html": ".html",
+    "application/xhtml+xml": ".xhtml",
+}
 
 
 def _normalize(text: str) -> str:
@@ -26,7 +99,101 @@ def _read_docx(path: Path) -> str:
     with zipfile.ZipFile(path) as zf:
         xml = zf.read("word/document.xml").decode("utf-8", errors="ignore")
     soup = BeautifulSoup(xml, "xml")
-    return "\n".join(t.get_text() for t in soup.find_all("w:t"))
+    paragraphs = []
+    for paragraph in soup.find_all("w:p"):
+        text = "".join(node.get_text() for node in paragraph.find_all("w:t"))
+        if text.strip():
+            paragraphs.append(text)
+    return "\n".join(paragraphs)
+
+
+def _read_pptx(path: Path) -> str:
+    with zipfile.ZipFile(path) as zf:
+        slides = sorted(
+            (name for name in zf.namelist() if re.fullmatch(r"ppt/slides/slide\d+\.xml", name)),
+            key=lambda name: int(re.search(r"(\d+)", Path(name).stem).group(1)),
+        )
+        blocks = []
+        for slide in slides:
+            xml = zf.read(slide).decode("utf-8", errors="ignore")
+            soup = BeautifulSoup(xml, "xml")
+            texts = [node.get_text() for node in soup.find_all("a:t")]
+            text = " ".join(item.strip() for item in texts if item.strip())
+            if text:
+                blocks.append(f"[{Path(slide).stem}] {text}")
+    return "\n".join(blocks)
+
+
+def _read_odf(path: Path) -> str:
+    with zipfile.ZipFile(path) as zf:
+        xml = zf.read("content.xml").decode("utf-8", errors="ignore")
+    soup = BeautifulSoup(xml, "xml")
+    blocks = []
+    for paragraph in soup.find_all(re.compile(r"^text:p$|^text:h$")):
+        text = paragraph.get_text(" ", strip=True)
+        if text:
+            blocks.append(text)
+    return "\n".join(blocks)
+
+
+def _read_epub(path: Path) -> str:
+    with zipfile.ZipFile(path) as zf:
+        names = sorted(name for name in zf.namelist() if name.lower().endswith((".html", ".xhtml", ".htm")))
+        blocks = []
+        for name in names:
+            raw = zf.read(name).decode("utf-8", errors="ignore")
+            text = BeautifulSoup(raw, "html.parser").get_text("\n")
+            text = "\n".join(line.strip() for line in text.splitlines() if line.strip())
+            if text:
+                blocks.append(text)
+    return "\n".join(blocks)
+
+
+def _read_xlsx(path: Path) -> str:
+    try:
+        from openpyxl import load_workbook
+    except ImportError:
+        return ""
+    book = load_workbook(str(path), read_only=True, data_only=True)
+    blocks = []
+    try:
+        for sheet in book.worksheets:
+            rows = []
+            for row in sheet.iter_rows(values_only=True):
+                cells = ["" if cell is None else str(cell).strip() for cell in row]
+                if any(cells):
+                    rows.append("\t".join(cells))
+            if rows:
+                blocks.append(f"[{sheet.title}]\n" + "\n".join(rows))
+    finally:
+        book.close()
+    return "\n\n".join(blocks)
+
+
+def _read_csv(path: Path, delimiter: str | None = None) -> str:
+    raw = path.read_text(encoding="utf-8-sig", errors="ignore")
+    if delimiter is None:
+        delimiter = "\t" if path.suffix.lower() == ".tsv" else None
+    if delimiter is None:
+        try:
+            delimiter = csv.Sniffer().sniff(raw[:8192], delimiters=",;\t|").delimiter
+        except Exception:
+            delimiter = ","
+    reader = csv.reader(io.StringIO(raw), delimiter=delimiter or ",")
+    lines = []
+    for row in reader:
+        cells = [cell.strip() for cell in row]
+        if any(cells):
+            lines.append("\t".join(cells))
+    return "\n".join(lines)
+
+
+def _read_json(path: Path) -> str:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8", errors="ignore"))
+        return json.dumps(data, ensure_ascii=False, indent=2)
+    except Exception:
+        return path.read_text(encoding="utf-8", errors="ignore")
 
 
 def _read_text(path: Path) -> str:
@@ -42,18 +209,30 @@ def _read_html(path: Path) -> str:
 READERS = {
     ".pdf": _read_pdf,
     ".docx": _read_docx,
-    ".txt": _read_text,
-    ".md": _read_text,
+    ".pptx": _read_pptx,
+    ".odt": _read_odf,
+    ".ods": _read_odf,
+    ".odp": _read_odf,
+    ".xlsx": _read_xlsx,
+    ".epub": _read_epub,
+    ".csv": _read_csv,
+    ".tsv": _read_csv,
+    ".json": _read_json,
     ".html": _read_html,
     ".htm": _read_html,
+    ".xhtml": _read_html,
+    ".svg": _read_text,
 }
 
 
 def load_file(path: Path) -> str:
-    reader = READERS.get(path.suffix.lower())
-    if reader is None:
-        return ""
-    return _normalize(reader(path))
+    suffix = path.suffix.lower()
+    reader = READERS.get(suffix)
+    if reader is not None:
+        return _normalize(reader(path))
+    if suffix in TEXT_SUFFIXES:
+        return _normalize(_read_text(path))
+    return ""
 
 
 def load_document(path: Path) -> dict:
@@ -62,8 +241,7 @@ def load_document(path: Path) -> dict:
     Возвращает title, pages (текст по страницам, для не-PDF — одна условная
     страница) и text (весь текст сразу).
     """
-    suffix = path.suffix.lower()
-    if suffix == ".pdf":
+    if path.suffix.lower() == ".pdf":
         return _read_pdf_document(path)
     text = load_file(path)
     return {"title": "", "pages": [text] if text else [], "text": text}
@@ -72,7 +250,7 @@ def load_document(path: Path) -> dict:
 def _read_pdf_document(path: Path) -> dict:
     reader = PdfReader(str(path))
     pages: list[str] = []
-    for number, page in enumerate(reader.pages, start=1):
+    for page in reader.pages:
         try:
             pages.append(_normalize(page.extract_text() or ""))
         except Exception:
@@ -104,3 +282,7 @@ def iter_documents(root: str):
             continue
         if path.suffix.lower() in SUPPORTED:
             yield path
+
+
+def suffix_for_content_type(content_type: str) -> str:
+    return CONTENT_TYPE_SUFFIXES.get((content_type or "").split(";")[0].strip().lower(), "")

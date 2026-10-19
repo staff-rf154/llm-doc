@@ -5,6 +5,7 @@ qdrant/
 ollama/
 .env
 data/docs/
+data/uploads
 data/extracted/
 data/app/
 data/settings/

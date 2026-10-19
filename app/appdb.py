@@ -2,6 +2,7 @@
 
 import hashlib
 import hmac
+from pathlib import Path
 import json
 import os
 import secrets
@@ -23,6 +24,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'user',
     active INTEGER NOT NULL DEFAULT 1,
+    hidden INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
 );
 CREATE TABLE IF NOT EXISTS sessions (
@@ -154,6 +156,8 @@ CREATE TABLE IF NOT EXISTS domains (
     temperature REAL,
     allow_inference INTEGER NOT NULL DEFAULT 0,
     log_analysis INTEGER NOT NULL DEFAULT 0,
+    settings TEXT NOT NULL DEFAULT '{}',
+    synonyms TEXT NOT NULL DEFAULT '[]',
     is_builtin INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL
@@ -187,6 +191,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
                 conn.execute(
                     f"ALTER TABLE {table} ADD COLUMN {column} TEXT NOT NULL DEFAULT ''"
                 )
+    existing = {row["name"] for row in conn.execute("PRAGMA table_info(users)")}
+    if "hidden" not in existing:
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN hidden INTEGER NOT NULL DEFAULT 0"
+        )
     existing = {row["name"] for row in conn.execute("PRAGMA table_info(domains)")}
     if "temperature" not in existing:
         conn.execute("ALTER TABLE domains ADD COLUMN temperature REAL")
@@ -197,6 +206,14 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "log_analysis" not in existing:
         conn.execute(
             "ALTER TABLE domains ADD COLUMN log_analysis INTEGER NOT NULL DEFAULT 0"
+        )
+    if "settings" not in existing:
+        conn.execute(
+            "ALTER TABLE domains ADD COLUMN settings TEXT NOT NULL DEFAULT '{}'"
+        )
+    if "synonyms" not in existing:
+        conn.execute(
+            "ALTER TABLE domains ADD COLUMN synonyms TEXT NOT NULL DEFAULT '[]'"
         )
 
 SESSION_DAYS = 14
@@ -241,16 +258,16 @@ def verify_password(password: str, salt: str, expected: str) -> bool:
     return hmac.compare_digest(digest, expected)
 
 
-def create_user(username: str, password: str, role: str = "user") -> dict:
+def create_user(username: str, password: str, role: str = "user", hidden: bool = False) -> dict:
     ensure_schema()
     salt, digest = hash_password(password)
     with _LOCK, connect() as conn:
         cur = conn.execute(
             """
-            INSERT INTO users (username, salt, password_hash, role, active, created_at)
-            VALUES (?, ?, ?, ?, 1, ?)
+            INSERT INTO users (username, salt, password_hash, role, active, hidden, created_at)
+            VALUES (?, ?, ?, ?, 1, ?, ?)
             """,
-            (username.strip(), salt, digest, role, now()),
+            (username.strip(), salt, digest, role, 1 if hidden else 0, now()),
         )
         user_id = cur.lastrowid
     return get_user(user_id) or {}
@@ -260,7 +277,7 @@ def get_user(user_id: int) -> dict | None:
     ensure_schema()
     with connect() as conn:
         row = conn.execute(
-            "SELECT id, username, role, active, created_at FROM users WHERE id = ?",
+            "SELECT id, username, role, active, hidden, created_at FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
     return dict(row) if row else None
@@ -271,7 +288,7 @@ def get_user_by_name(username: str) -> dict | None:
     with connect() as conn:
         row = conn.execute(
             """
-            SELECT id, username, salt, password_hash, role, active, created_at
+            SELECT id, username, salt, password_hash, role, active, hidden, created_at
             FROM users WHERE username = ?
             """,
             (username.strip(),),
@@ -291,7 +308,7 @@ def list_users() -> list[dict]:
                    (SELECT COUNT(*) FROM ratings t JOIN requests r2 ON r2.id = t.request_id
                      WHERE r2.user_id = u.id AND t.vote = 'down') AS dislikes,
                    (SELECT MAX(r3.created_at) FROM requests r3 WHERE r3.user_id = u.id) AS last_request
-            FROM users u ORDER BY u.id
+            FROM users u WHERE u.hidden = 0 ORDER BY u.id
             """
         ).fetchall()
     return [dict(row) for row in rows]
@@ -360,7 +377,7 @@ def user_by_token(token: str | None) -> dict | None:
     with connect() as conn:
         row = conn.execute(
             """
-            SELECT u.id, u.username, u.role, u.active
+            SELECT u.id, u.username, u.role, u.active, u.hidden
             FROM sessions s JOIN users u ON u.id = s.user_id
             WHERE s.token = ? AND s.expires_at > ?
             """,
@@ -382,6 +399,40 @@ def ensure_admin() -> str:
         return ""
     create_user(username, password, role="admin")
     return f"создан администратор {username}"
+
+
+def ensure_system() -> dict:
+    """Создать скрытого системного пользователя с ролью `system`.
+
+    Пароль берётся из SYSTEM_PASSWORD, а при пустом значении генерируется
+    случайный и сохраняется в файл рядом с базой приложения.
+    """
+    ensure_schema()
+    username = config.SYSTEM_USERNAME or "system"
+    password = (config.SYSTEM_PASSWORD or "").strip()
+    generated = False
+    if not password:
+        password = secrets.token_urlsafe(12)
+        generated = True
+    existing = get_user_by_name(username)
+    if existing:
+        if not existing.get("hidden") or existing.get("role") != "system":
+            with _LOCK, connect() as conn:
+                conn.execute(
+                    "UPDATE users SET hidden = 1, role = 'system', active = 1 WHERE id = ?",
+                    (existing["id"],),
+                )
+            return {"created": True, "username": username, "password": password, "generated": generated}
+        return {}
+    create_user(username, password, role="system", hidden=True)
+    return {"created": True, "username": username, "password": password, "generated": generated}
+
+
+def save_system_password(password: str) -> str:
+    """Сохранить пароль системного пользователя в файл, вернуть путь."""
+    path = Path(config.APP_DB).parent / "system_password.txt"
+    path.write_text(password + "\n", encoding="utf-8")
+    return str(path)
 
 
 def log_request(
@@ -635,6 +686,16 @@ def _decode_domain(row: sqlite3.Row) -> dict:
         except json.JSONDecodeError:
             item[field] = []
     try:
+        value = json.loads(item.get("settings") or "{}")
+        item["settings"] = value if isinstance(value, dict) else {}
+    except json.JSONDecodeError:
+        item["settings"] = {}
+    try:
+        value = json.loads(item.get("synonyms") or "{}")
+        item["synonyms"] = _decode_synonyms(value)
+    except json.JSONDecodeError:
+        item["synonyms"] = {}
+    try:
         item["temperature"] = (
             float(item["temperature"]) if item.get("temperature") is not None else None
         )
@@ -645,6 +706,31 @@ def _decode_domain(row: sqlite3.Row) -> dict:
     item["allow_inference"] = bool(item.get("allow_inference"))
     item["log_analysis"] = bool(item.get("log_analysis"))
     return item
+
+
+def _decode_synonyms(value) -> dict[str, list[str]]:
+    result: dict[str, list[str]] = {}
+    if isinstance(value, dict):
+        items = value.items()
+    elif isinstance(value, list):
+        items = []
+        for entry in value:
+            if isinstance(entry, dict):
+                items.append((entry.get("term", ""), entry.get("synonyms", [])))
+    else:
+        return result
+    for term, synonyms in items:
+        key = str(term).strip()
+        if not key:
+            continue
+        if isinstance(synonyms, str):
+            synonyms = [part.strip() for part in synonyms.split(",")]
+        if not isinstance(synonyms, list):
+            continue
+        clean = [str(s).strip() for s in synonyms if str(s).strip()]
+        if clean:
+            result[key] = clean
+    return result
 
 
 def list_domains() -> list[dict]:
@@ -682,6 +768,8 @@ def insert_domain(
     temperature: float | None = None,
     allow_inference: bool = False,
     log_analysis: bool = False,
+    settings: dict | None = None,
+    synonyms: dict | None = None,
     is_builtin: bool = False,
 ) -> dict:
     ensure_schema()
@@ -692,8 +780,8 @@ def insert_domain(
             INSERT INTO domains
                 (slug, title, description, system_prompt, capabilities, categories,
                  terminology, sample_questions, temperature, allow_inference,
-                 log_analysis, is_builtin, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 log_analysis, settings, synonyms, is_builtin, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 slug,
@@ -707,6 +795,8 @@ def insert_domain(
                 temperature,
                 1 if allow_inference else 0,
                 1 if log_analysis else 0,
+                json.dumps(settings or {}, ensure_ascii=False),
+                json.dumps(synonyms or {}, ensure_ascii=False),
                 1 if is_builtin else 0,
                 stamp,
                 stamp,
@@ -720,7 +810,8 @@ def update_domain(slug: str, **fields) -> dict | None:
     allowed = {
         "slug", "title", "description", "system_prompt",
         "capabilities", "categories", "terminology", "sample_questions",
-        "temperature", "allow_inference", "log_analysis",
+        "temperature", "allow_inference", "log_analysis", "is_builtin",
+        "settings", "synonyms",
     }
     sets: list[str] = []
     params: list = []
@@ -729,7 +820,11 @@ def update_domain(slug: str, **fields) -> dict | None:
             continue
         if key in DOMAIN_JSON_FIELDS:
             value = json.dumps(value or [], ensure_ascii=False)
-        elif key in ("allow_inference", "log_analysis"):
+        elif key == "settings":
+            value = json.dumps(value or {}, ensure_ascii=False)
+        elif key == "synonyms":
+            value = json.dumps(value or {}, ensure_ascii=False)
+        elif key in ("allow_inference", "log_analysis", "is_builtin"):
             value = 1 if value else 0
         sets.append(f"{key} = ?")
         params.append(value)
@@ -991,6 +1086,7 @@ def stats_by_user() -> list[dict]:
             FROM users u
             LEFT JOIN requests r ON r.user_id = u.id
             LEFT JOIN ratings t ON t.request_id = r.id
+            WHERE u.hidden = 0
             GROUP BY u.id ORDER BY requests DESC, u.username
             """
         ).fetchall()
@@ -1036,8 +1132,8 @@ def summary() -> dict:
         row = conn.execute(
             """
             SELECT
-                (SELECT COUNT(*) FROM users) AS users,
-                (SELECT COUNT(*) FROM users WHERE active = 1) AS active_users,
+                (SELECT COUNT(*) FROM users WHERE hidden = 0) AS users,
+                (SELECT COUNT(*) FROM users WHERE active = 1 AND hidden = 0) AS active_users,
                 (SELECT COUNT(*) FROM requests) AS requests,
                 (SELECT COUNT(*) FROM ratings WHERE vote = 'up') AS likes,
                 (SELECT COUNT(*) FROM ratings WHERE vote = 'down') AS dislikes,

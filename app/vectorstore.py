@@ -315,3 +315,31 @@ def collection_info(name: str | None = None) -> dict:
         "status": str(info.status),
         "collection": name,
     }
+
+def drop_all_collections() -> dict:
+    """Удалить все коллекции документации, исправлений, уроков и алиасы.
+
+    Используется при полном сбросе индекса из кабинета.
+    """
+    client = get_qdrant()
+    import config as cfg
+
+    wanted = {
+        cfg.QDRANT_COLLECTION,
+        cfg.CORRECTIONS_COLLECTION,
+        cfg.LESSONS_COLLECTION,
+    }
+    dropped: list[str] = []
+    for item in client.get_collections().collections:
+        name = item.name
+        if name in wanted or name.startswith(f"{cfg.QDRANT_COLLECTION}_v"):
+            client.delete_collection(collection_name=name)
+            dropped.append(name)
+    for alias in (cfg.QDRANT_COLLECTION,):
+        try:
+            client.delete_collection(collection_name=alias)
+            if alias not in dropped:
+                dropped.append(alias)
+        except Exception:
+            pass
+    return {"dropped": dropped, "count": len(dropped)}

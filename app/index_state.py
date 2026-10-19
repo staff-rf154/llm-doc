@@ -173,3 +173,12 @@ def run_stats(collection: str) -> dict:
         "done": int(row["done"]),
         "chunks": int(row["chunks"]),
     }
+
+def clear_all() -> int:
+    """Очистить журнал состояния индексации: прогоны и пофайловый прогресс."""
+    ensure_schema()
+    with connect() as conn:
+        files = conn.execute("SELECT COUNT(*) AS n FROM file_progress").fetchone()["n"]
+        conn.execute("DELETE FROM file_progress")
+        conn.execute("DELETE FROM runs")
+    return int(files)
