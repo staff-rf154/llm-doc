@@ -1,3 +1,35 @@
+# LLM RAG Assistant (Enterprise-ready локальная RAG-система)
+
+Внутренняя RAG-платформа для точного ответов на вопросы по корпоративной документации. Полностью локальное развёртывание: FastAPI + Qdrant + Ollama + SQLite. Поддерживает гибридный поиск, переранжирование, синонимы, доменные профили (сферы деятельности), автообучение на исправлениях, ролевой доступ, многоформатную индексацию.
+
+## Содержание
+- [Ключевые возможности](#ключевые-возможности)
+- [Архитектура](#архитектура)
+- [Изоляция данных и коллекций Qdrant](#изоляция-данных-и-коллекций-qdrant)
+- [Ролевой доступ (RBAC)](#ролевой-доступ-rbac)
+- [Чанкинг](#чанкинг)
+- [Поддерживаемые форматы](#поддерживаемые-форматы)
+- [Функционал кабинета администратора](#функционал-кабинета-администратора)
+- [Наблюдаемость и оценка (observability/evaluation)](#наблюдаемость-и-оценка-observabilityevaluation)
+- [Требования](#требования)
+- [Быстрый старт](#быстрый-старт)
+- [Конфигурация (.env)](#конфигурация-env)
+- [Структура данных](#структура-данных)
+- [Управление индексом](#управление-индексом)
+- [Сферы деятельности и приоритет настроек](#сферы-деятельности-и-приоритет-настроек)
+- [Синонимы](#синонимы)
+- [API-обзор](#api-обзор)
+- [Безопасность](#безопасность)
+- [Восстановление и обслуживание](#восстановление-и-обслуживание)
+- [Техническая оценка](#техническая-оценка)
+- [Финансовая оценка (ориентир)](#финансовая-оценка-ориентир)
+- [Рекламный блок: выгода для бизнеса](#рекламный-блок-выгода-для-бизнеса)
+- [Для каких компаний подходит](#для-каких-компаний-подходит)
+- [Временные затраты на создание](#временные-затраты-на-создание)
+- [Эксплуатационные затраты](#эксплуатационные-затраты)
+- [Об авторе](#об-авторе)
+
+
 # LLM RAG Assistant
 
 Система вопросов-ответов по документации с векторным поиском (RAG). Работает в Docker Compose с FastAPI, Qdrant, Ollama и поддержкой гибридного поиска, переранжирования и автообучения.
@@ -8,6 +40,43 @@
 - ~6-8 ГБ свободной памяти (для моделей эмбеддингов и Ollama)
 
 ## Быстрый старт
+## Конфигурация (.env)
+## Структура данных
+
+- `data/app/app.db` — пользователи, сессии, запросы, рейтинги, исправления, уроки, домены (domains: title/slug/system_prompt/capabilities/categories/terminology/sample_questions/temperature/allow_inference/log_analysis/settings/synonyms/is_builtin)
+- `data/settings/settings.db` — локальные настройки (переопределяют .env)
+- `data/synonyms/synonyms.db` — глобальный словарь синонимов
+- `data/index_state/index_state.db` — прогресс индексации (runs, file_progress)
+- `data/prompts/prompts.db` — стартовые промты чата
+- `data/eval/` — результаты RAGAS
+- `data/docs/` — исходная документация (rw)
+- `data/docs/upload/` — загруженные файлы
+- `qdrant/storage/` — данные векторного хранилища
+- `ollama/models/` — модели Ollama
+- `app/.cache/` — кэш huggingface/fastembed
+
+
+
+Основные переменные (см. `.env.example`):
+- `APP_PORT` (8091) — порт веб-интерфейса
+- `APP_TITLE` — заголовок приложения
+- `SITE_URL`, `DOCS_BASE_URL` — базовые URL
+- `ADMIN_USERNAME`, `ADMIN_PASSWORD` — учётные данные первого администратора
+- `SYSTEM_USERNAME`, `SYSTEM_PASSWORD` — системный пользователь (если пуст — генерируется)
+- `DOMAIN_PROFILE` — slug домена по умолчанию
+- `QDRANT_URL`, `QDRANT_COLLECTION`, `QDRANT_API_KEY`, `QDRANT_PORT`, `QDRANT_GRPC_PORT`
+- `LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`, `LLM_TEMPERATURE`, `LLM_MAX_TOKENS`
+- `EMBEDDING_MODEL`, `E5_QUERY_PREFIX`, `E5_PASSAGE_PREFIX`, `EMBED_BATCH`, `EMBEDDER_DEVICE`
+- `HYBRID_SPARSE`, `SPARSE_MODEL`, `HYBRID_CANDIDATES`, `HYBRID_FUSION`
+- `RERANKER_ENABLED`, `RERANKER_MODEL`, `RERANKER_CANDIDATES`, `RERANKER_TOP_K`, `RERANKER_DEVICE`, `RERANKER_MAX_LENGTH`, `RERANKER_BATCH`
+- `CHUNK_SIZE`, `CHUNK_OVERLAP`, `RETRIEVE_TOP_K`, `CORRECTION_*`, `SYNONYMS_MAX_VARIANTS`
+- `LESSONS_COLLECTION`, `LESSONS_MAX`, `LESSONS_MIN_SCORE`, `TRAINING_FROM_CORRECTIONS`
+- `WEB_CRAWL_*`, `AUTOLEARN_*`, `QUESTIONGEN_*`, `BOOTSTRAP_*`
+- Пути БД: `APP_DB`, `SETTINGS_DB`, `INDEX_STATE_DB`, `PROMPTS_DB`, `SYNONYMS_DB`, `EVAL_DIR`, `DOCS_DIR`, `UPLOADS_DIR` (настраиваются)
+
+Изменение параметров, требующих переиндексации (`EMBEDDING_MODEL`, `E5_*`, `SPARSE_MODEL`, `CHUNK_SIZE`, `CHUNK_OVERLAP`), помечается в кабинете.
+
+
 
 1. Клонировать репозиторий
 2. Скопировать `.env.example` в `.env` и при необходимости поправить значения
