@@ -464,6 +464,16 @@
     </div>
 
     <div class="card">
+      <h2>История качества</h2>
+      <div class="muted" style="margin-bottom:10px">
+        Результаты регрессионных прогонов <code>make evaluate</code>: динамика
+        grounded_rate, context_recall и answer_correctness по времени.
+      </div>
+      <div id="eval-history-chart"></div>
+      <div class="row" id="eval-history-metrics"></div>
+    </div>
+
+    <div class="card">
       <h2>Уроки-кандидаты</h2>
       <div class="muted" style="margin-bottom:10px">
         Собраны из проблемных тем. Проверьте текст и одобрите — только после этого урок
@@ -835,7 +845,7 @@ function loadTab(tab) {
   if (tab === 'corrections') loadCorrections();
   if (tab === 'synonyms') loadSynonyms();
   if (tab === 'train') { loadLessons(); loadTraining(); }
-  if (tab === 'autolearn') { loadAutolearn(); loadQuestionGen(); loadGeneratedQuestions(); loadBootstrap(); }
+  if (tab === 'autolearn') { loadAutolearn(); loadQuestionGen(); loadGeneratedQuestions(); loadBootstrap(); loadEvalHistory(); }
   if (tab === 'settings') { loadSettings(); loadCapabilities(); loadEval(); if (currentUser && currentUser.role === 'system') loadDomain(); }
   if (tab === 'domains') loadDomains();
   if (tab === 'models') loadModels();
@@ -2698,6 +2708,62 @@ const ISSUE_KINDS = {
 
 let alTimer = null;
 
+async function loadEvalHistory() {
+  const chart = document.getElementById('eval-history-chart');
+  const metrics = document.getElementById('eval-history-metrics');
+  if (!chart || !metrics) return;
+  const data = await j('/api/admin/eval/history?limit=30');
+  const items = data.items || [];
+  while (chart.firstChild) chart.removeChild(chart.firstChild);
+  while (metrics.firstChild) metrics.removeChild(metrics.firstChild);
+  if (!items.length) {
+    chart.appendChild(el('div', { className: 'muted', textContent: 'Пока нет прогонов. Запустите make evaluate.' }));
+    return;
+  }
+  const series = [
+    ['grounded_rate', 'grounded', '#2e7d32'],
+    ['context_recall', 'context recall', '#1565c0'],
+    ['answer_correctness', 'correctness', '#ef6c00']
+  ];
+  const width = 640, height = 220, pad = 28;
+  const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+  svg.setAttribute('viewBox', '0 0 ' + width + ' ' + height);
+  svg.setAttribute('width', '100%');
+  svg.setAttribute('height', '220');
+  const stepX = items.length > 1 ? (width - pad * 2) / (items.length - 1) : 0;
+  series.forEach(([key, label, color]) => {
+    const points = items.map((item, index) => {
+      const value = Math.max(0, Math.min(1, Number(item[key]) || 0));
+      const x = pad + stepX * index;
+      const y = height - pad - value * (height - pad * 2);
+      return x.toFixed(1) + ',' + y.toFixed(1);
+    }).join(' ');
+    const line = document.createElementNS('http://www.w3.org/2000/svg', 'polyline');
+    line.setAttribute('points', points);
+    line.setAttribute('fill', 'none');
+    line.setAttribute('stroke', color);
+    line.setAttribute('stroke-width', '2.5');
+    svg.appendChild(line);
+    const legend = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+    legend.setAttribute('x', pad);
+    legend.setAttribute('y', 14 + series.findIndex(x => x[0] === key) * 14);
+    legend.setAttribute('fill', color);
+    legend.setAttribute('font-size', '12');
+    legend.textContent = label;
+    svg.appendChild(legend);
+  });
+  const axis = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+  axis.setAttribute('x1', pad);
+  axis.setAttribute('y1', height - pad);
+  axis.setAttribute('x2', width - pad);
+  axis.setAttribute('y2', height - pad);
+  axis.setAttribute('stroke', '#bbb');
+  svg.appendChild(axis);
+  chart.appendChild(svg);
+  const last = items[items.length - 1];
+  metrics.appendChild(el('span', { className: 'muted', textContent: 'Прогонов: ' + items.length + ' · последний: ' + last.at }));
+}
+
 function verdictPill(verdict) {
   return ['partial', 'wrong', 'refused_wrongly'].includes(verdict) ? 'down' : 'up';
 }
@@ -2741,7 +2807,10 @@ function renderAutolearn(data) {
     ['Проблемных', evals.problems || 0],
     ['Открытых ошибок', issues.open || 0],
     ['Тем', summary.topics || 0],
-    ['Уроков-кандидатов', summary.candidates || 0]
+    ['Уроков-кандидатов', summary.candidates || 0],
+    ['Согласие судьи с оценками', (summary.calibration && summary.calibration.total)
+      ? Math.round(summary.calibration.agreement * 100) + '% (' + summary.calibration.agreed + '/' + summary.calibration.total + ')'
+      : '—']
   ].forEach(pair => metrics.appendChild(el('span', { className: 'muted', textContent: pair[0] + ': ' + pair[1] })));
 
   renderAlProcess(job, summary);

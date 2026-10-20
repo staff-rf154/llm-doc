@@ -1,4 +1,4 @@
-.PHONY: up down build ingest ingest-dry ask evaluate evaluate-ragas logs pull-llm ps clean reindex reindex-status reindex-pause reindex-resume prompts synonyms synonyms-expand seed-synonyms super-test
+.PHONY: up down build ingest ingest-dry ask evaluate evaluate-ragas evaluate-regression logs pull-llm ps clean reindex reindex-status reindex-pause reindex-resume prompts synonyms synonyms-expand seed-synonyms super-test backup restore backup-status
 
 up:
 	docker compose up -d --build
@@ -61,6 +61,20 @@ evaluate:
 
 evaluate-ragas:
 	docker compose run --rm app python eval/eval.py --ragas
+
+evaluate-regression:
+	docker compose exec -T app python eval/eval.py
+	docker compose exec -T app python eval/regression.py
+
+backup:
+	./scripts/backup.sh
+
+restore:
+	@test -n "$(BACKUP)" || (echo "Укажите BACKUP=data/backups/<копия>" >&2; exit 2)
+	RESTORE=yes ./scripts/restore.sh $(BACKUP) $(if $(DOCS),--docs,)
+
+backup-status:
+	docker compose exec -T app python backup.py
 
 super-test:
 	docker compose exec -T app python eval/super_test.py $(ARGS)

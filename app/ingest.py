@@ -6,12 +6,14 @@ from datetime import datetime
 from pathlib import Path
 from urllib.parse import quote
 from typing import Callable
+import time
 
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from qdrant_client.http import models
 
 import config
 import index_state
+import metrics
 import settings
 import vectorstore as vs
 from loaders import iter_documents, load_document
@@ -30,14 +32,26 @@ def split_text(text: str) -> list[str]:
 DOCS_BASE_URL = config.DOCS_BASE_URL
 
 
+def split_parent_text(text: str) -> list[str]:
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=settings.int_value("PARENT_CHUNK_SIZE") or config.PARENT_CHUNK_SIZE,
+        chunk_overlap=settings.int_value("PARENT_CHUNK_OVERLAP") or config.PARENT_CHUNK_OVERLAP,
+        separators=["\n\n", "\n", ". ", " ", ""],
+        keep_separator=True,
+    )
+    return [c.strip() for c in splitter.split_text(text) if c.strip()]
+
+
 def chunk_points(
     rel: str,
     chunks: list[str],
     pages: list[int] | None = None,
     title: str = "",
+    parents: list[dict] | None = None,
 ) -> list[dict]:
-    return [
-        {
+    points = []
+    for index, chunk in enumerate(chunks):
+        point = {
             "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{rel}:{index}")),
             "text": chunk,
             "source": rel,
@@ -46,8 +60,49 @@ def chunk_points(
             "title": title,
             "kind": "file",
         }
-        for index, chunk in enumerate(chunks)
-    ]
+        if parents and index < len(parents):
+            parent = parents[index]
+            point.update(
+                {
+                    "parent_id": parent["id"],
+                    "parent_text": parent["text"],
+                    "parent_chunk": parent["chunk"],
+                    "parent_page": parent["page"],
+                }
+            )
+        points.append(point)
+    return points
+
+
+def split_with_parents(rel: str, document: dict) -> tuple[list[str], list[int], list[dict]]:
+    """Дочерние чанки для индекса и родительский текст для промпта."""
+    chunks: list[str] = []
+    pages: list[int] = []
+    parents: list[dict] = []
+    parent_total = 0
+    for number, page_text in enumerate(document.get("pages") or [], start=1):
+        if not page_text or not page_text.strip():
+            continue
+        for parent_text in split_parent_text(page_text):
+            parent = {
+                "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{rel}:parent:{parent_total}")),
+                "text": parent_text,
+                "chunk": parent_total,
+                "page": number,
+            }
+            parent_total += 1
+            for chunk in split_text(parent_text):
+                chunks.append(chunk)
+                pages.append(number)
+                parents.append(parent)
+    return chunks, pages, parents
+
+
+def document_chunks(rel: str, document: dict) -> tuple[list[str], list[int], list[dict] | None]:
+    if settings.bool_value("PARENT_CHILD_ENABLED", config.PARENT_CHILD_ENABLED):
+        return split_with_parents(rel, document)
+    chunks, pages = split_with_pages(document)
+    return chunks, pages, None
 
 
 def split_with_pages(document: dict) -> tuple[list[str], list[int]]:
@@ -113,6 +168,16 @@ def upsert_batch(client, collection: str, batch: list[dict]) -> None:
                     "title": p.get("title", ""),
                     "kind": p.get("kind", "file"),
                     "url": p.get("url", "") or origin_url(p["source"]),
+                    **(
+                        {
+                            "parent_id": p["parent_id"],
+                            "parent_text": p["parent_text"],
+                            "parent_chunk": p["parent_chunk"],
+                            "parent_page": p["parent_page"],
+                        }
+                        if p.get("parent_id")
+                        else {}
+                    ),
                 },
             )
         )
@@ -126,8 +191,8 @@ def collect_chunks() -> list[dict]:
         if not document["text"]:
             print(f"skip empty: {path}")
             continue
-        chunks, pages = split_with_pages(document)
-        points.extend(chunk_points(rel, chunks, pages, document.get("title", "")))
+        chunks, pages, parents = document_chunks(rel, document)
+        points.extend(chunk_points(rel, chunks, pages, document.get("title", ""), parents))
         print(f"{rel}: {len(chunks)} chunks")
     return points
 
@@ -141,10 +206,10 @@ def index_single(root: str, path: Path, rel: str) -> dict:
     text = document.get("text", "")
     if not text.strip():
         raise ValueError("Файл не содержит текста")
-    chunks, pages = split_with_pages(document)
+    chunks, pages, parents = document_chunks(rel, document)
     if not chunks:
         raise ValueError("Файл не содержит текста")
-    points = chunk_points(rel, chunks, pages, document.get("title", ""))
+    points = chunk_points(rel, chunks, pages, document.get("title", ""), parents)
     vs.delete_source_points(rel, collection)
     for batch in iter_batches(points, settings.int_value("INGEST_BATCH_SIZE")):
         upsert_batch(client, collection, batch)
@@ -167,6 +232,7 @@ class ReindexJob:
         self._lock = threading.RLock()
         self._gate = threading.Event()
         self._gate.set()
+        self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self.state: dict = self._idle()
 
@@ -210,6 +276,7 @@ class ReindexJob:
                 "status": "running",
                 "started_at": datetime.now().isoformat(timespec="seconds"),
             }
+        self._stop.clear()
         self._gate.set()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -226,6 +293,21 @@ class ReindexJob:
             paused_at=datetime.now().isoformat(timespec="seconds"),
         )
         return {**self.snapshot(), "paused": True}
+
+    def stop(self, timeout: float = 20.0) -> dict:
+        """Остановить индексацию: дописать текущий батч, сохранить срез, встать на паузу."""
+        with self._lock:
+            if self.state["status"] not in ("running", "paused") or self._thread is None:
+                return {**self.state, "stopped": False}
+            self._stop.set()
+            self._gate.set()
+            self._update(
+                status="paused",
+                paused_at=datetime.now().isoformat(timespec="seconds"),
+            )
+            thread = self._thread
+        thread.join(timeout=timeout)
+        return {**self.snapshot(), "stopped": not thread.is_alive()}
 
     def wait_paused(self, timeout: float | None = None) -> bool:
         """Дождаться фактической остановки на паузе (после дописывания батча)."""
@@ -247,7 +329,15 @@ class ReindexJob:
                 progress=self._progress,
                 on_failure=self._failures,
                 gate=self._gate,
+                stopping=self._stop,
             )
+            if result.get("interrupted"):
+                self._update(
+                    status="paused",
+                    collection=result["collection"],
+                    result=result,
+                )
+                return
             self._update(
                 status="done",
                 finished_at=datetime.now().isoformat(timespec="seconds"),
@@ -259,7 +349,7 @@ class ReindexJob:
         except Exception as exc:
             self._gate.set()
             self._update(
-                status="error",
+                status="paused" if self._stop.is_set() else "error",
                 finished_at=datetime.now().isoformat(timespec="seconds"),
                 error=str(exc),
             )
@@ -297,6 +387,7 @@ def reindex(
     progress: Callable[..., None] | None = None,
     on_failure: Callable[[list[dict]], None] | None = None,
     gate: threading.Event | None = None,
+    stopping: threading.Event | None = None,
 ) -> dict:
     """Полная переиндексация без простоя: новая коллекция + переключение алиаса.
 
@@ -305,6 +396,7 @@ def reindex(
     """
     gate = gate or threading.Event()
     gate.set()
+    started_at = time.monotonic()
 
     open_run = index_state.get_open_run()
     orphans = [] if open_run else vs.orphan_collections()
@@ -352,11 +444,11 @@ def reindex(
             if not text:
                 print(f"skip empty: {path}")
                 return
-            chunks, pages = split_with_pages(document)
+            chunks, pages, parents = document_chunks(rel, document)
             if not chunks:
                 print(f"skip empty: {path}")
                 return
-            points = chunk_points(rel, chunks, pages, document.get("title", ""))
+            points = chunk_points(rel, chunks, pages, document.get("title", ""), parents)
 
             start_at = 0
             have = already.get(rel, set())
@@ -383,6 +475,8 @@ def reindex(
             since_snapshot = 0
             for batch in iter_batches(points[start_at:], settings.int_value("INGEST_BATCH_SIZE")):
                 gate.wait()
+                if stopping is not None and stopping.is_set():
+                    break
                 upsert_batch(client, collection, batch)
                 start_at += len(batch)
                 bump("done", len(batch))
@@ -398,6 +492,8 @@ def reindex(
                     )
                     since_snapshot = 0
                 snapshot_counters()
+                if stopping is not None and stopping.is_set():
+                    break
 
             index_state.save_file_progress(
                 collection,
@@ -422,11 +518,24 @@ def reindex(
     with ThreadPoolExecutor(max_workers=workers) as pool:
         list(pool.map(lambda item: index_file(*item), files))
 
+    metrics.REINDEX_DURATION.observe(time.monotonic() - started_at)
     done_total = counters["done"]
     total_chunks = counters["total"]
     skipped = counters["skipped"]
 
     total_known = total_chunks
+    if stopping is not None and stopping.is_set():
+        index_state.mark_run(collection, "paused")
+        return {
+            "collection": collection,
+            "points": total_known,
+            "previous": None,
+            "skipped_files": skipped,
+            "failed_files": failed,
+            "resumed": resumed,
+            "interrupted": True,
+        }
+
     if progress:
         progress(done_total, total_chunks, skipped, phase="swapping")
 

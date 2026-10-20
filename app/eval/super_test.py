@@ -68,6 +68,18 @@ def main() -> int:
     except Exception as exc:
         step("health", False, str(exc))
 
+    try:
+        deep = client.get("/health?deep=1").json()
+        checks = deep.get("checks", {})
+        failed = [name for name, value in checks.items() if not value.get("ok")]
+        step(
+            "deep-health",
+            deep.get("status") == "ok" and not failed,
+            f"status={deep.get('status')}, проверок={len(checks)}, сбоев={len(failed)}",
+        )
+    except Exception as exc:
+        step("deep-health", False, str(exc))
+
     if not login(client, args.user, args.password):
         if not login(client, os.getenv("SYSTEM_USERNAME", "system"), os.getenv("SYSTEM_PASSWORD", "")):
             step("login", False, "неверные учётные данные")
@@ -76,6 +88,16 @@ def main() -> int:
     me = client.get("/api/me").json()
     ROLE = me.get("role", "")
     step("me", ROLE in ("admin", "system"), f"role={ROLE}")
+
+    try:
+        data = client.get("/api/admin/backup/status").json()
+        step(
+            "backup-status",
+            "count" in data and "latest" in data,
+            f"копий={data.get('count')}, каталог={data.get('dir')}",
+        )
+    except Exception as exc:
+        step("backup-status", False, str(exc))
 
     try:
         data = client.get("/api/admin/settings").json()
@@ -194,6 +216,22 @@ def main() -> int:
             step(label, isinstance(data, dict), "получен")
         except Exception as exc:
             step(label, False, str(exc))
+
+    try:
+        data = client.get("/api/admin/eval/history?limit=5").json()
+        step("eval-history", isinstance(data.get("items"), list), f"записей={len(data.get('items', []))}")
+    except Exception as exc:
+        step("eval-history", False, str(exc))
+
+    try:
+        data = client.get("/api/admin/autolearn/calibration").json()
+        step(
+            "judge-calibration",
+            "agreement" in data,
+            f"оценок={data.get('total')}, согласие={data.get('agreement')}",
+        )
+    except Exception as exc:
+        step("judge-calibration", False, str(exc))
 
     try:
         data = client.post("/api/admin/questiongen/similarity").json()

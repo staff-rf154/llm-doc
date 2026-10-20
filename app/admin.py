@@ -1,5 +1,8 @@
 """API кабинета администратора: пользователи, оценки, исправления, статистика."""
 
+import json
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
@@ -230,6 +233,11 @@ def autolearn_overview(
             "issues": appdb.count_issues("open"),
         },
     }
+
+
+@router.get("/autolearn/calibration")
+def autolearn_calibration(user: dict = Depends(auth.require_admin)) -> dict:
+    return autolearn.calibration()
 
 
 @router.get("/autolearn/evals")
@@ -589,6 +597,36 @@ class SynonymUpsert(BaseModel):
 
 class SynonymImport(BaseModel):
     items: dict[str, list[str]]
+
+
+@router.get("/backup/status")
+def backup_status(user: dict = Depends(auth.require_admin)) -> dict:
+    import backup
+
+    return backup.status()
+
+
+@router.get("/eval/history")
+def eval_history(limit: int = 30, user: dict = Depends(auth.require_admin)) -> dict:
+    root = Path(config.EVAL_DIR) / "history"
+    items = []
+    if root.exists():
+        for path in sorted(root.glob("*.json"))[-max(1, min(limit, 200)):]:
+            try:
+                data = json.loads(path.read_text(encoding="utf-8"))
+            except Exception:
+                continue
+            items.append(
+                {
+                    "at": path.stem,
+                    "grounded_rate": data.get("grounded_rate", 0),
+                    "context_recall": data.get("context_recall", 0),
+                    "answer_keyword_hit_rate": data.get("answer_keyword_hit_rate", 0),
+                    "exact_match": data.get("exact_match", 0),
+                    "answer_correctness": data.get("answer_correctness", 0),
+                }
+            )
+    return {"items": items}
 
 
 @router.get("/summary")

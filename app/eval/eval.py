@@ -1,5 +1,6 @@
 import argparse
 import json
+from datetime import datetime
 from pathlib import Path
 
 import config
@@ -35,6 +36,22 @@ def lexical_metrics(question: str, answer: str, contexts: list[str]) -> dict:
     }
 
 
+def judge_correctness(question: str, answer: str, contexts: list[str], reference: str) -> float:
+    """Оценка правильности ответа LLM-судьёй по эталону и фрагментам."""
+    try:
+        import autolearn
+
+        messages = [{"role": "system", "content": autolearn.JUDGE_SYSTEM}]
+        messages.extend(autolearn._fewshot_messages())
+        prompt = autolearn._judge_user_prompt(question, answer, "\n\n".join(contexts))
+        if reference:
+            prompt += f"\n\nЭталонный ответ: {reference}"
+        messages.append({"role": "user", "content": prompt})
+        return float(autolearn._judge_completion(messages).get("score", 0.0))
+    except Exception:
+        return 0.0
+
+
 def evaluate(dataset: list[dict]) -> dict:
     rows = []
     for index, item in enumerate(dataset, start=1):
@@ -43,6 +60,9 @@ def evaluate(dataset: list[dict]) -> dict:
         contexts = [c.text for c in result.chunks]
         metrics = lexical_metrics(question, result.text, contexts)
         reference = item.get("answer", "")
+        metrics["answer_correctness"] = judge_correctness(
+            question, result.text, contexts, reference
+        )
         metrics["exact_match"] = bool(reference) and result.text.strip() == reference.strip()
         metrics["grounded"] = result.grounded
         metrics["question"] = question
@@ -61,6 +81,7 @@ def evaluate(dataset: list[dict]) -> dict:
         "context_recall": mean("context_recall"),
         "answer_keyword_hit_rate": mean("answer_keyword_hit_rate"),
         "exact_match": mean("exact_match"),
+        "answer_correctness": mean("answer_correctness"),
         "rows": rows,
     }
 
@@ -126,6 +147,12 @@ def main() -> None:
         report["ragas"] = evaluate_with_ragas(dataset)
 
     Path(args.out).write_text(
+        json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
+    history = Path(config.EVAL_DIR) / "history"
+    history.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    (history / f"{stamp}.json").write_text(
         json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8"
     )
     print(json.dumps({k: v for k, v in report.items() if k != "rows"}, ensure_ascii=False, indent=2))

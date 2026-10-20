@@ -11,6 +11,7 @@ import config
 import capabilities as capabilities_mod
 import ingest
 import metrics
+import models as models_mod
 import promptdb
 import prompts
 import rag
@@ -27,6 +28,21 @@ app = FastAPI(
 )
 
 app.middleware("http")(metrics.middleware)
+
+
+@app.on_event("shutdown")
+def shutdown() -> None:
+    """Graceful shutdown: дописать батч, сохранить срез и оставить run на паузе."""
+    try:
+        result = ingest.job.stop(timeout=20)
+        if result.get("stopped"):
+            print("индексация остановлена на паузе, срез сохранён")
+    except Exception as exc:
+        print(f"индексация не остановлена: {exc}")
+    try:
+        ingest.job.mark_interrupted()
+    except Exception as exc:
+        print(f"состояние индексации не сохранено: {exc}")
 
 
 @app.on_event("startup")
@@ -144,9 +160,78 @@ class RetrieveRequest(BaseModel):
     top_k: int | None = Field(default=None, ge=1, le=50)
 
 
+def _deep_health() -> dict:
+    """Проверка Qdrant, коллекции под алиасом, Ollama и записи в SQLite."""
+    checks: dict = {}
+    ok = True
+
+    started = time.perf_counter()
+    client = None
+    try:
+        client = vectorstore.get_qdrant()
+        client.get_collections()
+        checks["qdrant"] = {
+            "ok": True,
+            "ms": round((time.perf_counter() - started) * 1000, 1),
+        }
+    except Exception as exc:
+        ok = False
+        checks["qdrant"] = {"ok": False, "error": str(exc)}
+
+    if client is not None:
+        try:
+            name = vectorstore.target_name()
+            exists = client.collection_exists(name)
+            aliases = [a.alias_name for a in client.get_aliases().aliases]
+            alias_ok = config.QDRANT_COLLECTION in aliases
+            info = vectorstore.collection_info(name)
+            checks["collection"] = {
+                "ok": bool(exists and alias_ok),
+                "name": name,
+                "alias": config.QDRANT_COLLECTION,
+                "alias_ok": alias_ok,
+                "points": info.get("points", 0),
+            }
+            ok = ok and exists and alias_ok
+        except Exception as exc:
+            ok = False
+            checks["collection"] = {"ok": False, "error": str(exc)}
+
+    try:
+        info = models_mod.ollama_list()
+        required = settings.value("LLM_MODEL", config.LLM_MODEL)
+        names = [item.get("name", "") for item in info.get("models", [])]
+        present = required in names
+        checks["ollama"] = {
+            "ok": bool(info.get("available") and present),
+            "available": bool(info.get("available")),
+            "required": required,
+            "required_present": present,
+            "models": len(names),
+        }
+        ok = ok and checks["ollama"]["ok"]
+    except Exception as exc:
+        ok = False
+        checks["ollama"] = {"ok": False, "error": str(exc)}
+
+    try:
+        conn = appdb.connect()
+        try:
+            conn.execute("BEGIN IMMEDIATE")
+            conn.execute("ROLLBACK")
+        finally:
+            conn.close()
+        checks["sqlite"] = {"ok": True}
+    except Exception as exc:
+        ok = False
+        checks["sqlite"] = {"ok": False, "error": str(exc)}
+
+    return {"status": "ok" if ok else "degraded", "deep": True, "checks": checks}
+
+
 @app.get("/health")
-def health() -> dict:
-    return {
+def health(deep: int = 0) -> dict:
+    payload = {
         "status": "ok",
         "collection": config.QDRANT_COLLECTION,
         "title": app_title(),
@@ -154,6 +239,9 @@ def health() -> dict:
         "embedding_model": settings.value("EMBEDDING_MODEL", config.EMBEDDING_MODEL),
         "device": vectorstore.device_info(),
     }
+    if deep:
+        payload.update(_deep_health())
+    return payload
 
 
 @app.get("/metrics")

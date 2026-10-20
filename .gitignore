@@ -10,5 +10,8 @@ data/settings/
 data/index_state/
 data/synonyms/
 data/prompts/
+data/backups/
 data/eval/report.json
+data/eval/history/
+data/eval/baseline.json
 data/eval/super_test_*.md

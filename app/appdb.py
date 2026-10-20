@@ -1284,6 +1284,53 @@ def eval_summary() -> dict:
     return {"total": total, "problems": problems, "by_verdict": counts}
 
 
+def eval_score_for_question(question: str) -> float | None:
+    """Уверенность LLM-судьи для последнего запроса с таким вопросом."""
+    ensure_schema()
+    with connect() as conn:
+        row = conn.execute(
+            """
+            SELECT e.score
+            FROM requests r
+            JOIN request_evals e ON e.request_id = r.id
+            WHERE r.question = ? AND e.method = 'llm'
+            ORDER BY r.id DESC LIMIT 1
+            """,
+            (question,),
+        ).fetchone()
+    return float(row["score"]) if row else None
+
+
+def judge_calibration() -> dict:
+    """Согласие LLM-судьи с оценками пользователей (up/down)."""
+    ensure_schema()
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT e.verdict, t.vote
+            FROM request_evals e
+            JOIN requests r ON r.id = e.request_id
+            JOIN ratings t ON t.request_id = e.request_id
+            WHERE e.method = 'llm' AND t.vote IN ('up', 'down')
+            """
+        ).fetchall()
+    agreed = 0
+    total = 0
+    for row in rows:
+        verdict = row["verdict"]
+        vote = row["vote"]
+        if verdict not in ("ok", "partial", "wrong", "refused_wrongly"):
+            continue
+        total += 1
+        if (verdict == "ok" and vote == "up") or (verdict != "ok" and vote == "down"):
+            agreed += 1
+    return {
+        "total": total,
+        "agreed": agreed,
+        "agreement": round(agreed / total, 3) if total else 0.0,
+    }
+
+
 def add_issue(request_id: int, kind: str, detail: str = "") -> int | None:
     ensure_schema()
     with _LOCK, connect() as conn:

@@ -36,12 +36,15 @@ CPU без GPU. Поддерживает многоформатную индек
 - [Фоновая переиндексация без простоя](#фоновая-переиндексация-без-простоя)
 - [Срез прогресса, возобновление и пауза](#срез-прогресса-возобновление-и-пауза)
 - [Ускорение индексации](#ускорение-индексации)
+- [Резервное копирование и восстановление](#резервное-копирование-и-восстановление)
 - [Стартовые промты](#стартовые-промты)
 - [Подробнее об источниках](#подробнее-об-источниках)
 - [Веб-интерфейс](#веб-интерфейс)
 - [REST API](#rest-api)
 - [Локальная генерация на CPU](#локальная-генерация-на-cpu)
 - [Гибридный поиск и reranker](#гибридный-поиск-и-reranker)
+- [Родительские фрагменты](#родительские-фрагменты)
+- [Мониторинг и здоровье](#мониторинг-и-здоровье)
 - [Оценка качества](#оценка-качества)
 - [Супер-тест](#супер-тест)
 - [Переменные окружения](#переменные-окружения)
@@ -76,6 +79,9 @@ data/docs/** ──► loaders.py ──► чанкинг ──► multilingua
    постранично, поэтому чанк помнит страницу.
 3. **Чанкинг.** `ingest.split_text` режет текст `RecursiveCharacterTextSplitter`
    с перекрытием `CHUNK_SIZE` / `CHUNK_OVERLAP`; страницы чанкуются раздельно.
+   При `PARENT_CHILD_ENABLED=1` дополнительно собираются крупные родительские
+   фрагменты, а в ответ попадает их полный текст (см.
+   [Родительские фрагменты](#родительские-фрагменты)).
 4. **Эмбеддинги.** `vectorstore.embed_passages` кодирует чанки моделью
    `intfloat/multilingual-e5-base` (префикс `passage: `), запросы — с префиксом
    `query: `; векторы нормализованы, метрика косинусная.
@@ -90,6 +96,8 @@ data/docs/** ──► loaders.py ──► чанкинг ──► multilingua
 8. **Retrieval + генерация.** `rag.retrieve` берёт `RETRIEVE_TOP_K` фрагментов,
    `rag.ask` собирает промпт с цитатами и обращается к LLM (Ollama или внешний
    OpenAI-совместимый API). Флаг `grounded` показывает, был ли ответ отказом.
+   В режиме parent-child поиск идёт по дочерним чанкам, а в промпт после
+   дедупликации подставляется родительский текст.
 9. **Сайты.** Страницы сайтов пишутся в ту же активную коллекцию с источником
    `web/<host>/<path>` и URL в payload.
 10. **Журнал.** Каждый вопрос и ответ пишутся в `app.db` вместе с пользователем,
@@ -528,7 +536,10 @@ curl -s -b cookie.txt -X POST localhost:8091/api/admin/training/run
    (`question_topics`, `topic_requests`): у темы хранится представитель, число
    вопросов и число проблемных.
 3. **LLM-судья.** По заданию модель сверяет ответ с фрагментами и возвращает
-   строгий JSON: `verdict`, `score`, `reason`, `suggested_answer`.
+   строгий JSON: `verdict`, `score`, `reason`, `suggested_answer`. Судья может
+   работать через отдельный endpoint (`JUDGE_BASE_URL`, `JUDGE_MODEL`,
+   `JUDGE_API_KEY`), получает few-shot примеры из `JUDGE_FEWSHOT_PATH`,
+   проверяет ответ по схеме и повторяет запрос один раз, если JSON невалиден.
 4. **Уроки-кандидаты.** Из проблемных тем (не меньше `AUTOLEARN_MIN_TOPIC_HITS`)
    наставник собирает уроки со статусом `candidate`. Они не попадают в ответы,
    пока администратор не одобрит их; одобренный урок становится `active`.
@@ -547,6 +558,18 @@ curl -s -b cookie.txt -X POST localhost:8091/api/admin/training/run
 Эвристика обновляется при каждом ответе, но **не затирает вердикт модели**
 (`method='llm'`). Ошибки (`downvote`, `refusal`, `no_sources`, `llm_wrong`) имеют
 статус `open`, `resolved` или `dismissed`.
+
+### Судья и калибровка
+
+Судья возвращает только допустимые значения (`ok`, `partial`, `wrong`,
+`refused_wrongly`) и `score` в диапазоне 0–1; при нарушении схемы выполняется
+один повтор, после чего ставится `unknown`. Токены судьи учитываются в метрике
+`llm_tokens_total{kind="judge",type="prompt"|"completion"|"total"}`.
+
+Темы с оценкой судьи ниже `AUTOLEARN_MIN_JUDGE_SCORE` (по умолчанию `0.6`) не
+порождают урок-кандидат. Согласие судьи с оценками пользователей видно в
+карточке автообучения и в `GET /api/admin/autolearn/calibration`: сравниваются
+вердикты `method='llm'` и голоса `up`/`down`.
 
 ### Память вопросов и схожесть
 
@@ -579,7 +602,12 @@ LLM-судью и собирает уроки-кандидаты.
 | `AUTOLEARN_LLM_LIMIT` | `20` | сколько запросов за прогон отдавать судье |
 | `AUTOLEARN_TOPIC_THRESHOLD` | `0.84` | порог схожести вопросов для темы |
 | `AUTOLEARN_MIN_TOPIC_HITS` | `3` | проблемных вопросов для урока-кандидата |
+| `AUTOLEARN_MIN_JUDGE_SCORE` | `0.6` | минимальная оценка судьи для урока-кандидата |
 | `AUTOLEARN_MAX_TOPICS` | `300` | предохранитель по числу тем |
+| `JUDGE_BASE_URL` | — | отдельный OpenAI-совместимый endpoint судьи |
+| `JUDGE_API_KEY` | — | ключ судьи (пусто — ключ LLM) |
+| `JUDGE_MODEL` | — | модель судьи (пусто — `LLM_MODEL`) |
+| `JUDGE_FEWSHOT_PATH` | `/data/eval/judge_fewshot.json` | few-shot примеры судьи |
 | `QUESTIONGEN_VARIANTS` | `3` | сколько переформулировок на фрагмент |
 | `QUESTIONGEN_SIM_THRESHOLD` | `0.84` | порог схожести для кластера |
 | `QUESTIONGEN_DEDUP_THRESHOLD` | `0.93` | порог почти-дубля |
@@ -594,6 +622,7 @@ curl -s -b cookie.txt -X POST localhost:8091/api/admin/autolearn/run \
 curl -s -b cookie.txt -X POST localhost:8091/api/admin/autolearn/lessons/12/approve
 curl -s -b cookie.txt -X POST localhost:8091/api/admin/autolearn/lessons/12/reject
 curl -s -b cookie.txt -X POST localhost:8091/api/admin/autolearn/issues/5/dismiss
+curl -s -b cookie.txt localhost:8091/api/admin/autolearn/calibration | jq
 
 curl -s -b cookie.txt 'localhost:8091/api/admin/questiongen/generated?limit=20&offset=0' | jq
 curl -s -b cookie.txt localhost:8091/api/admin/questiongen/clusters | jq
@@ -798,6 +827,41 @@ make reindex          # на паузе тоже продолжает
 блокировкой, поэтому `INGEST_WORKERS` даёт прирост за счёт совмещения I/O,
 чанкинга и записи с расчётом эмбеддингов.
 
+## Резервное копирование и восстановление
+
+`make backup` создаёт в `data/backups/<дата-время>/` согласованный набор:
+
+- SQLite-копии `app.db`, `settings.db`, `synonyms.db`, `prompts.db`,
+  `index_state.db` через `sqlite3.backup` (без блокировки работающего сервиса);
+- snapshot активной коллекции Qdrant (через API, затем `docker compose cp`);
+- `docs.tar.gz` с `data/docs` (исходники и загрузки);
+- `system_password.txt` и `qdrant_collection.txt`;
+- `manifest.json` с размерами файлов для проверки целостности.
+
+```bash
+make backup                 # создать копию, оставить последние 7
+make backup-status          # размер, возраст и список копий
+make restore BACKUP=data/backups/20261020-201738           # без документов
+make restore BACKUP=data/backups/20261020-201738 DOCS=1    # с data/docs
+```
+
+Восстановление необратимо и требует `RESTORE=yes` (Makefile передаёт его сам):
+скрипт проверяет манифест, останавливает `app`, возвращает SQLite и пароль
+system, при `--docs` распаковывает документацию, восстанавливает коллекцию
+Qdrant из snapshot, переключает алиас `docs`, запускает приложение и проверяет
+`/health?deep=1`. `.env` и внешние секреты в копию не входят — храните их
+отдельно.
+
+Пример cron (ежедневно в 02:30):
+
+```cron
+30 2 * * * cd /opt/compose/LLM && make backup >> data/backups/cron.log 2>&1
+```
+
+Каждая копия содержит полный snapshot документов: при 500 МБ документации и
+retention 7 планируйте около 3,5 ГБ. Статус доступен в кабинете и через
+`GET /api/admin/backup/status`.
+
 ## Стартовые промты
 
 Стартовые вопросы хранятся в `data/prompts/prompts.db`.
@@ -861,6 +925,7 @@ curl -s -b cookie.txt -X POST localhost:8091/retrieve \
 | Метод | Путь | Назначение |
 |-------|------|-----------|
 | GET | `/health` | статус, название базы, модели, устройство |
+| GET | `/health?deep=1` | проверка Qdrant, коллекции, Ollama и SQLite |
 | GET | `/metrics` | метрики Prometheus |
 | GET | `/collection` | состояние активной коллекции |
 | GET | `/prompts` | стартовые промты |
@@ -919,6 +984,9 @@ curl -s -b cookie.txt -X POST localhost:8091/retrieve \
 | POST | `/questiongen/similarity` | пересчёт схожести и дублей |
 | GET/POST | `/bootstrap`, `/bootstrap/run` | первичное обучение |
 | GET/POST | `/index`, `/index/start`, `/index/pause`, `/index/resume` | управление индексацией |
+| GET | `/backup/status` | копии, размер и возраст последней |
+| GET | `/eval/history` | история прогонов оценки качества |
+| GET | `/autolearn/calibration` | согласие судьи с оценками пользователей |
 | GET/POST | `/models*`, `/domain*` | модели и сферы (system) |
 
 Формат ответа `/ask`:
@@ -1012,6 +1080,43 @@ LLM_MODEL=gpt-4o-mini
 | `RERANKER_MAX_LENGTH` | `512` | максимум токенов на пару |
 | `SPARSE_MODEL` | `Qdrant/bm25` | sparse-модель fastembed |
 
+## Родительские фрагменты
+
+Режим parent-child улучшает полноту ответа: поиск и reranker работают по
+мелким дочерним чанкам (`CHUNK_SIZE`), а в промпт попадает объемлющий
+родительский фрагмент.
+
+```dotenv
+PARENT_CHILD_ENABLED=0
+PARENT_CHUNK_SIZE=1800
+PARENT_CHUNK_OVERLAP=200
+```
+
+- при индексации в payload дочерней точки пишутся `parent_id`, `parent_text`,
+  `parent_chunk` и `parent_page`;
+- `rag.retrieve` при включённом флаге переранжирует пул кандидатов, затем
+  дедуплицирует результаты по `parent_id` и подставляет `parent_text`;
+- без переиндексации режим не даёт эффекта: старые точки не содержат
+  родительских полей и остаются дочерними;
+- параметры доступны в кабинете (раздел «Поиск») и помечены как требующие
+  переиндексации;
+- по умолчанию режим выключен, чтобы не менять поведение существующего индекса.
+
+## Мониторинг и здоровье
+
+- `GET /health` — быстрый liveness: статус, коллекция, модели, устройство.
+- `GET /health?deep=1` — readiness: ping Qdrant, наличие коллекции под алиасом
+  `docs`, доступность Ollama и нужной модели, тест записи в SQLite. Ответ
+  содержит `status` (`ok`/`degraded`) и `checks` с длительностью проверок.
+- `GET /metrics` — Prometheus. Кроме HTTP-метрик:
+  `llm_retrieval_latency_seconds`, `llm_reindex_duration_seconds`,
+  `llm_tokens_total{kind="chat"|"judge",type="prompt"|"completion"|"total"}`.
+- При остановке контейнера приложение дожидается текущего батча
+  переиндексации (до 20 с), сохраняет срез и помечает прогон `paused`
+  (при остановке контейнера — `interrupted`);
+  `stop_grace_period` в compose — 30 с. После старта `make reindex` продолжит
+  с последнего среза.
+
 ## Оценка качества
 
 Эталонные вопросы — в `data/eval/dataset.json`:
@@ -1021,21 +1126,33 @@ LLM_MODEL=gpt-4o-mini
 ```
 
 ```bash
-make evaluate        # grounded_rate, context_recall, hit_rate
-make evaluate-ragas  # faithfulness, answer_relevancy, context_precision
+make evaluate              # grounded_rate, context_recall, hit_rate, answer_correctness
+make evaluate-ragas        # faithfulness, answer_relevancy, context_precision
+make evaluate-regression   # сравнение с baseline, код 1 при регрессе
 ```
 
-Отчёт пишется в `data/eval/report.json`. Тот же прогон запускается из кабинета:
-«Настройки» → карточка «Оценка качества»; API: `GET /api/admin/eval`,
-`POST /api/admin/eval/start` с `{"ragas": true}`.
+Отчёт пишется в `data/eval/report.json`, история прогонов — в
+`data/eval/history/<дата-время>.json`. `answer_correctness` — оценка судьи
+(0–1) по соответствию ответа фрагментам; она дополняет keyword-hit и recall.
+
+Первый `make evaluate-regression` создаёт `data/eval/baseline.json` из текущего
+отчёта. Дальше метрики сравниваются с baseline: падение больше чем на 5%
+(и не меньше 0,01) считается регрессом и даёт код выхода 1, что удобно для CI.
+Путь к baseline можно задать: `python eval/regression.py --baseline ...`.
+
+Тот же прогон запускается из кабинета: «Настройки» → карточка «Оценка
+качества»; история и график — на вкладке «Автообучение» (карточка «История
+качества»); API: `GET /api/admin/eval`, `POST /api/admin/eval/start` с
+`{"ragas": true}`, `GET /api/admin/eval/history?limit=20`.
 
 ## Супер-тест
 
-Сквозная проверка сервиса: `health` → `login` → `me` → настройки и проверка
-согласованности → модели и RBAC → сферы и RBAC → статус индексации → коллекция →
-`retrieve` (должен найти фрагменты) → `ask` по нескольким вопросам → оценка →
-автообучение / генерация вопросов / память вопросов и схожесть / первичное
-обучение → постраничная документация → сверка исправлений. При `--all-models`
+Сквозная проверка сервиса: `health` → `deep=1` → `login` → `me` → статус
+резервных копий → настройки и проверка согласованности → модели и RBAC → сферы и
+RBAC → статус индексации → коллекция → `retrieve` (должен найти фрагменты) →
+`ask` по нескольким вопросам → оценка → автообучение / генерация вопросов /
+память вопросов и схожесть / первичное обучение → история качества и калибровка
+судьи → постраничная документация → сверка исправлений. При `--all-models`
 дополнительно проверяется ответ по каждой модели Ollama.
 
 Тест учитывает роль: для `system` вкладки моделей и сфер должны отвечать `200`,
@@ -1075,7 +1192,8 @@ docker compose exec -T app python eval/super_test.py --user system --password ".
 | `SPARSE_MODEL` | `Qdrant/bm25` | sparse-модель |
 | `DOCS_DIR` | `/data/docs` | исходные документы (rw) |
 | `UPLOADS_DIR` | `/data/docs/upload` | загруженные файлы |
-| `EVAL_DIR` | `/data/eval` | эталонные вопросы и отчёты |
+| `EVAL_DIR` | `/data/eval` | эталонные вопросы, отчёты и few-shot судьи |
+| `BACKUP_DIR` | `/data/backups` | каталог резервных копий |
 | `PROMPTS_DB` | `/data/prompts/prompts.db` | БД стартовых промтов |
 | `PROMPTS_SEED_ON_START` | `1` | наполнять БД промтов при старте |
 | `PROMPTS_MAX` | `8` | сколько промтов отдавать в чат |
@@ -1115,7 +1233,12 @@ docker compose exec -T app python eval/super_test.py --user system --password ".
 | `AUTOLEARN_LLM_LIMIT` | `20` | запросов судье за прогон |
 | `AUTOLEARN_TOPIC_THRESHOLD` | `0.84` | порог схожести в тему |
 | `AUTOLEARN_MIN_TOPIC_HITS` | `3` | проблемных вопросов для урока |
+| `AUTOLEARN_MIN_JUDGE_SCORE` | `0.6` | минимальная оценка судьи для урока |
 | `AUTOLEARN_MAX_TOPICS` | `300` | предел числа тем |
+| `JUDGE_BASE_URL` | — | отдельный endpoint судьи |
+| `JUDGE_API_KEY` | — | ключ судьи |
+| `JUDGE_MODEL` | — | модель судьи (пусто — `LLM_MODEL`) |
+| `JUDGE_FEWSHOT_PATH` | `/data/eval/judge_fewshot.json` | few-shot примеры |
 | `QUESTIONGEN_COUNT` | `10` | вопросов за запуск |
 | `QUESTIONGEN_SOURCES` | `docs,topics,domain` | источники вопросов |
 | `QUESTIONGEN_JUDGE` | `1` | LLM-судья после прогона |
@@ -1134,6 +1257,9 @@ docker compose exec -T app python eval/super_test.py --user system --password ".
 | `UPLOAD_URL_TIMEOUT` | `60` | таймаут скачивания по ссылке, сек |
 | `CHUNK_SIZE` | `1000` | размер чанка |
 | `CHUNK_OVERLAP` | `150` | перекрытие чанков |
+| `PARENT_CHILD_ENABLED` | `0` | поиск по child, текст из parent |
+| `PARENT_CHUNK_SIZE` | `1800` | размер родительского фрагмента |
+| `PARENT_CHUNK_OVERLAP` | `200` | перекрытие родительских фрагментов |
 | `RETRIEVE_TOP_K` | `5` | фрагментов в ответе |
 | `EMBED_BATCH` | `32` | размер батча эмбеддингов |
 | `OMP_NUM_THREADS` | `12` | потоки CPU для torch |
@@ -1155,6 +1281,10 @@ docker compose exec -T app python eval/super_test.py --user system --password ".
 | `make synonyms` / `make synonyms-expand Q="..."` / `make seed-synonyms` | словарь синонимов |
 | `make ask Q="..."` | быстрый запрос из CLI |
 | `make evaluate` / `make evaluate-ragas` | оценка качества |
+| `make evaluate-regression` | сравнение с baseline, код 1 при регрессе |
+| `make backup` | резервная копия (SQLite, Qdrant, docs) |
+| `make backup-status` | размер и возраст копий |
+| `make restore BACKUP=... [DOCS=1]` | восстановление из копии |
 | `make super-test [ARGS="..."]` | сквозной супер-тест |
 | `make pull-llm LLM_MODEL=...` | скачать модель в Ollama |
 | `make clean` | остановить сервисы с volumes и удалить кэш/хранилище |
@@ -1176,6 +1306,7 @@ app/
   synonymdb.py      БД синонимов и расширение запроса
   synonyms.py       стартовый каталог синонимов
   index_state.py    срезы прогресса индексации
+  backup.py         статус резервных копий для кабинета
   appdb.py          пользователи, сессии, журнал, оценки, исправления,
                     уроки, направления, память вопросов
   auth.py           cookie-сессии и проверка ролей
@@ -1198,10 +1329,12 @@ app/
   static/index.html веб-интерфейс чата
   static/admin.html кабинет администратора
   eval/eval.py      оценка качества
+  eval/regression.py сравнение с baseline
   eval/super_test.py сквозной супер-тест
 data/
   docs              исходная документация (rw; upload — загрузки)
-  eval              эталонные вопросы и отчёты
+  eval              эталонные вопросы, few-shot судьи, отчёты и история
+  backups           резервные копии (SQLite, Qdrant, docs)
   prompts           SQLite-БД стартовых промтов
   synonyms          SQLite-БД словаря синонимов
   app               SQLite-БД пользователей, журнала и настроек
@@ -1213,8 +1346,9 @@ ollama/models       веса локальных моделей
 ```
 
 Каталоги `data/app`, `data/settings`, `data/index_state`, `data/synonyms`,
-`data/docs`, `data/prompts`, `.env`, `qdrant/` и `ollama/` исключены из git:
-в них учётные данные, документация и состояние, зависящее от машины.
+`data/docs`, `data/prompts`, `data/backups`, `data/eval/history`, `.env`,
+`qdrant/` и `ollama/` исключены из git: в них учётные данные, документация,
+резервные копии и состояние, зависящее от машины.
 
 ## Тюнинг качества
 
@@ -1222,6 +1356,7 @@ ollama/models       веса локальных моделей
 |----------|------------|--------------|
 | Размер чанка | `CHUNK_SIZE` | 1000 |
 | Перекрытие | `CHUNK_OVERLAP` | 150 |
+| Родительский фрагмент | `PARENT_CHUNK_SIZE` | 1800 |
 | Фрагментов в ответе | `RETRIEVE_TOP_K` | 5 |
 | Модель эмбеддингов | `EMBEDDING_MODEL` | `intfloat/multilingual-e5-base` |
 | Порог исправления | `CORRECTION_MATCH_THRESHOLD` | 0.86 |
@@ -1258,8 +1393,17 @@ ollama/models       веса локальных моделей
   мало общих значимых слов; проверьте порог или отключите исправление.
 - `status: error` в `/reindex` — активный индекс не тронут, смотрите `error`;
   после исправления запустите `make reindex` ещё раз.
-- Поиск не находит документы после смены `EMBEDDING_MODEL` или `CHUNK_SIZE` —
-  выполните `make reindex`.
+- Поиск не находит документы после смены `EMBEDDING_MODEL`, `CHUNK_SIZE` или
+  `PARENT_CHILD_ENABLED` — выполните `make reindex`.
+- `health?deep=1` вернул `degraded` — смотрите `checks`: нет коллекции под
+  алиасом `docs`, недоступен Qdrant/Ollama, не скачана `LLM_MODEL` или нет
+  прав на запись в SQLite.
+- `make backup` падает на snapshot Qdrant — проверьте `QDRANT_PORT`,
+  `QDRANT_API_KEY` и свободное место; копия создаётся только целиком.
+- `restore` отказывается работать — нужен `RESTORE=yes` и целый
+  `manifest.json`; восстановление перезаписывает SQLite и коллекцию.
+- Судья возвращает `unknown` — проверьте `JUDGE_MODEL`/`JUDGE_BASE_URL` и
+  валидность `judge_fewshot.json`; невалидный JSON повторяется один раз.
 - Долгий первый запуск — скачивается модель эмбеддингов (~1.1 ГБ) в `app/.cache`.
 - OOM на 7B — используйте `qwen2.5:3b-instruct` или внешний API.
 - Долгая индексация — увеличьте `INGEST_WORKERS` и `OMP_NUM_THREADS` под число

@@ -18,6 +18,7 @@ import numpy as np
 import appdb
 import config
 import lessons
+import metrics
 import rag
 import settings
 import vectorstore as vs
@@ -304,6 +305,122 @@ def analyze_generated_similarity(
 
 
 
+def _judge_client():
+    base = settings.value("JUDGE_BASE_URL", config.JUDGE_BASE_URL) or ""
+    if not base:
+        return rag.get_client()
+    key = settings.value("JUDGE_API_KEY", config.JUDGE_API_KEY) or config.LLM_API_KEY
+    from openai import OpenAI
+
+    return OpenAI(base_url=base, api_key=key, timeout=120)
+
+
+def _judge_model() -> str:
+    return (
+        settings.value("JUDGE_MODEL", config.JUDGE_MODEL)
+        or settings.value("LLM_MODEL", config.LLM_MODEL)
+    )
+
+
+def _judge_user_prompt(question: str, answer: str, context: str) -> str:
+    return (
+        f"Вопрос пользователя: {question}\n\n"
+        f"Ответ ассистента: {answer}\n\n"
+        f"Фрагменты документации:\n{context or 'фрагменты не найдены'}"
+    )
+
+
+def _fewshot_messages() -> list[dict]:
+    path = settings.value("JUDGE_FEWSHOT_PATH", config.JUDGE_FEWSHOT_PATH)
+    try:
+        with open(path, encoding="utf-8") as handle:
+            items = json.load(handle)
+    except Exception:
+        return []
+    messages = []
+    for item in items[:8]:
+        if not isinstance(item, dict):
+            continue
+        verdict = str(item.get("verdict", "")).strip()
+        if verdict not in ("ok", "partial", "wrong", "refused_wrongly"):
+            continue
+        messages.append(
+            {
+                "role": "user",
+                "content": _judge_user_prompt(
+                    str(item.get("question", "")),
+                    str(item.get("answer", "")),
+                    str(item.get("fragments", "")),
+                ),
+            }
+        )
+        messages.append(
+            {
+                "role": "assistant",
+                "content": json.dumps(
+                    {
+                        "verdict": verdict,
+                        "score": float(item.get("score", 0)),
+                        "reason": str(item.get("reason", "")),
+                        "suggested_answer": str(item.get("suggested_answer", "")),
+                    },
+                    ensure_ascii=False,
+                ),
+            }
+        )
+    return messages
+
+
+def _valid_judgement(data: dict) -> dict | None:
+    if not isinstance(data, dict):
+        return None
+    verdict = str(data.get("verdict", "")).strip()
+    if verdict not in ("ok", "partial", "wrong", "refused_wrongly"):
+        return None
+    try:
+        score = float(data.get("score", 0))
+    except (TypeError, ValueError):
+        return None
+    if not 0.0 <= score <= 1.0:
+        return None
+    return {
+        "verdict": verdict,
+        "score": score,
+        "reason": str(data.get("reason", "")).strip(),
+        "suggested_answer": str(data.get("suggested_answer", "")).strip(),
+    }
+
+
+def _judge_completion(messages: list[dict]) -> dict:
+    client = _judge_client()
+    model = _judge_model()
+    raw = ""
+    for attempt in range(2):
+        completion = client.chat.completions.create(
+            model=model,
+            messages=messages,
+            temperature=0.0,
+        )
+        metrics.observe_llm_usage(getattr(completion, "usage", None), kind="judge")
+        raw = completion.choices[0].message.content or ""
+        valid = _valid_judgement(_parse_json(raw))
+        if valid is not None:
+            return valid
+        if attempt == 0:
+            messages = messages + [
+                {"role": "assistant", "content": raw},
+                {
+                    "role": "user",
+                    "content": (
+                        "Ответ не соответствует схеме. Верни только JSON с полями "
+                        "verdict (ok|partial|wrong|refused_wrongly), score (0..1), "
+                        "reason, suggested_answer."
+                    ),
+                },
+            ]
+    return {"verdict": "unknown", "score": 0.0, "reason": "невалидный JSON судьи", "suggested_answer": ""}
+
+
 def _parse_json(raw: str) -> dict:
     text = (raw or "").strip()
     match = re.search(r"\{.*\}", text, re.DOTALL)
@@ -323,33 +440,19 @@ def judge(request_id: int) -> dict | None:
     question = request.get("question") or ""
     answer = request.get("answer") or ""
     context = _fragments(question)
-    messages = [
-        {"role": "system", "content": JUDGE_SYSTEM},
+    messages = [{"role": "system", "content": JUDGE_SYSTEM}]
+    messages.extend(_fewshot_messages())
+    messages.append(
         {
             "role": "user",
-            "content": (
-                f"Вопрос пользователя: {question}\n\n"
-                f"Ответ ассистента: {answer}\n\n"
-                f"Фрагменты документации:\n{context or 'фрагменты не найдены'}"
-            ),
-        },
-    ]
-    client = rag.get_client()
-    completion = client.chat.completions.create(
-        model=settings.value("LLM_MODEL", config.LLM_MODEL),
-        messages=messages,
-        temperature=0.0,
+            "content": _judge_user_prompt(question, answer, context),
+        }
     )
-    data = _parse_json(completion.choices[0].message.content or "")
-    verdict = str(data.get("verdict", "")).strip()
-    if verdict not in VERDICTS:
-        verdict = "unknown"
-    try:
-        score = float(data.get("score", 0))
-    except (TypeError, ValueError):
-        score = 0.0
-    reason = str(data.get("reason", "")).strip()
-    suggested = str(data.get("suggested_answer", "")).strip()
+    data = _judge_completion(messages)
+    verdict = data["verdict"]
+    score = data["score"]
+    reason = data["reason"]
+    suggested = data["suggested_answer"]
     appdb.upsert_request_eval(
         request_id, verdict, score, reason or "оценка модели", method="llm", suggested_answer=suggested
     )
@@ -419,6 +522,12 @@ def generate_candidates(min_hits: int | None = None, max_topics: int | None = No
         representative = topic.get("representative") or topic.get("title") or ""
         if not representative or _lesson_exists(representative):
             continue
+        min_score = settings.float_value("AUTOLEARN_MIN_JUDGE_SCORE")
+        if min_score is None:
+            min_score = config.AUTOLEARN_MIN_JUDGE_SCORE
+        score = appdb.eval_score_for_question(representative)
+        if score is not None and score < min_score:
+            continue
         draft = _draft_from_question(representative)
         if not draft.get("answer"):
             continue
@@ -434,6 +543,10 @@ def generate_candidates(min_hits: int | None = None, max_topics: int | None = No
     return created
 
 
+def calibration() -> dict:
+    return appdb.judge_calibration()
+
+
 def summary() -> dict:
     candidates = appdb.list_lessons(status="candidate")
     return {
@@ -442,6 +555,7 @@ def summary() -> dict:
         "topics": len(appdb.list_topics()),
         "candidates": len(candidates),
         "questions": appdb.generated_similarity_summary(),
+        "calibration": appdb.judge_calibration(),
     }
 
 

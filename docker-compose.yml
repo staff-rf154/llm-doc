@@ -40,6 +40,7 @@ services:
         BASE_IMAGE: ${BASE_IMAGE:-python:3.11-slim}
         TORCH_INDEX_URL: ${TORCH_INDEX_URL:-https://download.pytorch.org/whl/cpu}
     container_name: llm-app
+    stop_grace_period: 30s
     env_file:
       - .env
     environment:
@@ -53,6 +54,7 @@ services:
       - EMBED_BATCH=${EMBED_BATCH:-16}
       - APP_DB=/data/app/app.db
       - SETTINGS_DB=/data/settings/settings.db
+      - BACKUP_DIR=/data/backups
       - ADMIN_USERNAME=${ADMIN_USERNAME:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
       - APP_TITLE=${APP_TITLE:-База знаний}
@@ -113,6 +115,7 @@ services:
       - ./data/app:/data/app
       - ./data/settings:/data/settings
       - ./data/synonyms:/data/synonyms
+      - ./data/backups:/data/backups
       - ./app/.cache:/app/.cache
     ports:
       - "${APP_PORT}:8000"

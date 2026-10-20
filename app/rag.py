@@ -1,9 +1,11 @@
 from dataclasses import dataclass
+import time
 
 from openai import OpenAI
 
 import config
 import domains
+import metrics
 import settings
 import vectorstore as vs
 from capabilities import is_capabilities_question, render as render_capabilities
@@ -19,6 +21,10 @@ class RetrievedChunk:
     title: str = ""
     page: int = 0
     kind: str = "file"
+    parent_id: str = ""
+    parent_text: str = ""
+    parent_chunk: int = 0
+    parent_page: int = 0
 
     @property
     def citation(self) -> str:
@@ -146,6 +152,10 @@ def _to_chunk(point) -> RetrievedChunk:
         title=payload.get("title", ""),
         page=int(payload.get("page", 0) or 0),
         kind=payload.get("kind", "file") or "file",
+        parent_id=payload.get("parent_id", "") or "",
+        parent_text=payload.get("parent_text", "") or "",
+        parent_chunk=int(payload.get("parent_chunk", 0) or 0),
+        parent_page=int(payload.get("parent_page", 0) or 0),
     )
 
 
@@ -196,11 +206,19 @@ def keep_count() -> int:
     return settings.int_value("RERANKER_TOP_K") or config.RERANKER_TOP_K
 
 
-def rerank(query: str, chunks: list[RetrievedChunk], top_k: int) -> list[RetrievedChunk]:
+def rerank(
+    query: str,
+    chunks: list[RetrievedChunk],
+    top_k: int,
+    candidates_limit: int | None = None,
+) -> list[RetrievedChunk]:
     """Переранжирование кандидатов cross-encoder'ом."""
     if not settings.bool_value("RERANKER_ENABLED", config.RERANKER_ENABLED) or not chunks:
         return chunks[:top_k]
-    candidates = chunks[: (settings.int_value("RERANKER_CANDIDATES") or config.RERANKER_CANDIDATES) or len(chunks)]
+    limit = candidates_limit or (
+        settings.int_value("RERANKER_CANDIDATES") or config.RERANKER_CANDIDATES
+    )
+    candidates = chunks[:limit]
     try:
         model = vs.get_reranker()
         pairs = [(query, chunk.text) for chunk in candidates]
@@ -222,6 +240,7 @@ def rerank(query: str, chunks: list[RetrievedChunk], top_k: int) -> list[Retriev
 
 
 def retrieve(query: str, top_k: int | None = None) -> list[RetrievedChunk]:
+    started = time.perf_counter()
     top_k = top_k or settings.int_value("RETRIEVE_TOP_K")
     client = vs.get_qdrant()
     target = vs.target_name()
@@ -239,8 +258,33 @@ def retrieve(query: str, top_k: int | None = None) -> list[RetrievedChunk]:
                 merged[key] = chunk
 
     ordered = sorted(merged.values(), key=lambda c: c.score, reverse=True)
-    ordered = rerank(query, ordered, top_k)
+    parent_mode = settings.bool_value("PARENT_CHILD_ENABLED", config.PARENT_CHILD_ENABLED)
+    candidates_limit = None
+    if parent_mode:
+        base = settings.int_value("RERANKER_CANDIDATES") or config.RERANKER_CANDIDATES
+        candidates_limit = max(pool, base * 2)
+    ordered = rerank(query, ordered, pool if parent_mode else top_k, candidates_limit)
+    if parent_mode:
+        ordered = expand_parents(ordered)
+    metrics.RETRIEVAL_LATENCY.observe(time.perf_counter() - started)
     return ordered[:top_k]
+
+
+def expand_parents(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
+    """Small-to-big: оставить по одному фрагменту на родителя и отдать его текст."""
+    result: list[RetrievedChunk] = []
+    seen: set[str] = set()
+    for chunk in chunks:
+        key = chunk.parent_id or f"{chunk.source}:{chunk.chunk}"
+        if key in seen:
+            continue
+        seen.add(key)
+        if chunk.parent_text:
+            chunk.text = chunk.parent_text
+            chunk.chunk = chunk.parent_chunk or chunk.chunk
+            chunk.page = chunk.parent_page or chunk.page
+        result.append(chunk)
+    return result
 
 
 def build_prompt(
@@ -384,6 +428,7 @@ def ask(question: str, top_k: int | None = None) -> Answer:
         ],
         temperature=temperature,
     )
+    metrics.observe_llm_usage(getattr(completion, "usage", None), kind="chat")
     text = (completion.choices[0].message.content or "").strip()
     grounded = NO_ANSWER_MARKER not in text.lower()
     if grounded:

@@ -36,6 +36,35 @@ HTTP_LATENCY = Histogram(
     buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30, 60, 120),
     registry=REGISTRY,
 )
+RETRIEVAL_LATENCY = Histogram(
+    "llm_retrieval_latency_seconds",
+    "Длительность поиска и переранжирования",
+    buckets=(0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1, 2.5, 5, 10, 30),
+    registry=REGISTRY,
+)
+REINDEX_DURATION = Histogram(
+    "llm_reindex_duration_seconds",
+    "Длительность полной переиндексации",
+    buckets=(30, 60, 120, 300, 600, 1200, 1800, 3600, 7200),
+    registry=REGISTRY,
+)
+LLM_TOKENS = Counter(
+    "llm_tokens_total",
+    "Токены генерации",
+    ["kind", "type"],
+    registry=REGISTRY,
+)
+
+
+def observe_llm_usage(usage, kind: str = "chat") -> None:
+    if usage is None:
+        return
+    prompt = int(getattr(usage, "prompt_tokens", 0) or 0)
+    completion = int(getattr(usage, "completion_tokens", 0) or 0)
+    total = int(getattr(usage, "total_tokens", 0) or 0) or prompt + completion
+    LLM_TOKENS.labels(kind, "prompt").inc(prompt)
+    LLM_TOKENS.labels(kind, "completion").inc(completion)
+    LLM_TOKENS.labels(kind, "total").inc(total)
 
 
 async def middleware(request, call_next):
