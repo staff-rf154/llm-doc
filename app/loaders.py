@@ -2,6 +2,7 @@ import csv
 import io
 import json
 import re
+import subprocess
 import zipfile
 from pathlib import Path
 
@@ -17,17 +18,28 @@ TEXT_SUFFIXES = {
 }
 HTML_SUFFIXES = {".html", ".htm", ".xhtml", ".epub"}
 OFFICE_SUFFIXES = {".docx", ".pptx", ".odt", ".ods", ".odp"}
+LEGACY_OFFICE_SUFFIXES = {".doc", ".xls", ".ppt"}
 TABLE_SUFFIXES = {".xlsx"}
-SUPPORTED = {".pdf"} | TEXT_SUFFIXES | HTML_SUFFIXES | OFFICE_SUFFIXES | TABLE_SUFFIXES
+SUPPORTED = (
+    {".pdf"}
+    | TEXT_SUFFIXES
+    | HTML_SUFFIXES
+    | OFFICE_SUFFIXES
+    | LEGACY_OFFICE_SUFFIXES
+    | TABLE_SUFFIXES
+)
 
 FORMAT_LABELS = {
     ".pdf": "PDF",
     ".docx": "DOCX",
+    ".doc": "DOC",
     ".pptx": "PPTX",
+    ".ppt": "PPT",
     ".odt": "ODT",
     ".ods": "ODS",
     ".odp": "ODP",
     ".xlsx": "XLSX",
+    ".xls": "XLS",
     ".txt": "TXT",
     ".md": "Markdown",
     ".markdown": "Markdown",
@@ -64,6 +76,9 @@ CONTENT_TYPE_SUFFIXES = {
     "application/vnd.openxmlformats-officedocument.wordprocessingml.document": ".docx",
     "application/vnd.openxmlformats-officedocument.presentationml.presentation": ".pptx",
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet": ".xlsx",
+    "application/msword": ".doc",
+    "application/vnd.ms-excel": ".xls",
+    "application/vnd.ms-powerpoint": ".ppt",
     "application/vnd.oasis.opendocument.text": ".odt",
     "application/vnd.oasis.opendocument.spreadsheet": ".ods",
     "application/vnd.oasis.opendocument.presentation": ".odp",
@@ -170,6 +185,33 @@ def _read_xlsx(path: Path) -> str:
     return "\n\n".join(blocks)
 
 
+def _read_legacy(path: Path, tool: str) -> str:
+    try:
+        result = subprocess.run(
+            [tool, "-d", "utf-8", str(path)],
+            capture_output=True,
+            timeout=120,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.decode("utf-8", errors="ignore")
+
+
+def _read_doc(path: Path) -> str:
+    return _read_legacy(path, "catdoc")
+
+
+def _read_xls(path: Path) -> str:
+    return _read_legacy(path, "xls2csv")
+
+
+def _read_ppt(path: Path) -> str:
+    return _read_legacy(path, "catppt")
+
+
 def _read_csv(path: Path, delimiter: str | None = None) -> str:
     raw = path.read_text(encoding="utf-8-sig", errors="ignore")
     if delimiter is None:
@@ -214,6 +256,9 @@ READERS = {
     ".ods": _read_odf,
     ".odp": _read_odf,
     ".xlsx": _read_xlsx,
+    ".doc": _read_doc,
+    ".xls": _read_xls,
+    ".ppt": _read_ppt,
     ".epub": _read_epub,
     ".csv": _read_csv,
     ".tsv": _read_csv,

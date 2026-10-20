@@ -267,7 +267,6 @@ def _business_families():
 
         domain_row = conn.execute(
             "SELECT COUNT(*) AS total, "
-            "COALESCE(SUM(CASE WHEN log_analysis = 1 THEN 1 ELSE 0 END), 0) AS logs, "
             "COALESCE(SUM(CASE WHEN is_builtin = 1 THEN 1 ELSE 0 END), 0) AS builtin "
             "FROM domains"
         ).fetchone()
@@ -276,7 +275,6 @@ def _business_families():
         )
         domain_metric.add_metric(["total"], int(domain_row["total"]))
         domain_metric.add_metric(["builtin"], int(domain_row["builtin"]))
-        domain_metric.add_metric(["log_analysis"], int(domain_row["logs"]))
         families.append(domain_metric)
     except Exception:
         pass

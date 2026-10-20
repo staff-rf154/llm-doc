@@ -20,6 +20,7 @@ from pathlib import Path
 import httpx
 
 STEPS: list[dict] = []
+ROLE = ""
 
 
 def step(name: str, ok: bool, detail: str = "") -> None:
@@ -28,7 +29,21 @@ def step(name: str, ok: bool, detail: str = "") -> None:
     print(f"[{mark}] {name}" + (f" — {detail}" if detail else ""))
 
 
+def login(client: httpx.Client, user: str, password: str) -> bool:
+    try:
+        response = client.post("/api/login", json={"username": user, "password": password})
+    except Exception as exc:
+        step("login", False, str(exc))
+        return False
+    if response.status_code != 200:
+        return False
+    me = client.get("/api/me").json()
+    step("login", me.get("role") in ("admin", "system"), f"user={user}, role={me.get('role')}")
+    return True
+
+
 def main() -> int:
+    global ROLE
     parser = argparse.ArgumentParser()
     parser.add_argument("--base", default="http://localhost:8000")
     parser.add_argument("--user", default=os.getenv("ADMIN_USERNAME", "admin"))
@@ -39,67 +54,94 @@ def main() -> int:
     args = parser.parse_args()
 
     base = args.base.rstrip("/")
-    client = httpx.Client(base_url=base, timeout=300)
+    client = httpx.Client(base_url=base, timeout=600)
 
-    health = {}
+    health: dict = {}
     try:
         response = client.get("/health")
         health = response.json()
-        step("health", response.status_code == 200 and health.get("status") == "ok", json.dumps(health, ensure_ascii=False))
+        step(
+            "health",
+            response.status_code == 200 and health.get("status") == "ok",
+            f"collection={health.get('collection')}, model={health.get('llm_model')}",
+        )
     except Exception as exc:
         step("health", False, str(exc))
 
-    if not client.post("/api/login", json={"username": args.user, "password": args.password}).status_code == 200:
-        step("login", False, "неверные учётные данные")
-        return finish(args, health)
-    step("login", True, args.user)
+    if not login(client, args.user, args.password):
+        if not login(client, os.getenv("SYSTEM_USERNAME", "system"), os.getenv("SYSTEM_PASSWORD", "")):
+            step("login", False, "неверные учётные данные")
+            return finish(args, health)
 
     me = client.get("/api/me").json()
-    step("me", me.get("role") == "admin", f"role={me.get('role')}")
+    ROLE = me.get("role", "")
+    step("me", ROLE in ("admin", "system"), f"role={ROLE}")
 
-    settings_ok = False
     try:
         data = client.get("/api/admin/settings").json()
         items = data.get("items", [])
         editable = [i for i in items if i.get("editable")]
         read_only = [i for i in items if not i.get("editable")]
         consistency = client.patch("/api/admin/settings/params", json={"values": {}}).json()
-        errors = consistency.get("warnings", [])
-        settings_ok = len(items) > 0 and "ok" in consistency
+        warnings = consistency.get("warnings", [])
         step(
             "settings",
-            settings_ok,
+            len(items) > 0 and consistency.get("ok") is True,
             f"всего={len(items)}, редактируемых={len(editable)}, только чтение={len(read_only)}, "
-            f"предупреждений={len(errors)}",
+            f"предупреждений={len(warnings)}",
         )
     except Exception as exc:
         step("settings", False, str(exc))
 
-    models = {}
+    models: dict = {}
+    models_status = 0
     try:
-        models = client.get("/api/admin/models").json()
+        response = client.get("/api/admin/models")
+        models_status = response.status_code
+        models = response.json() if response.status_code == 200 else {}
         ollama = models.get("ollama", {})
+        expected = 200 if ROLE == "system" else 403
         step(
             "models",
-            bool(models),
-            f"ollama={ollama.get('available')}, моделей={len(ollama.get('models', []))}, "
-            f"hf-кэш={len((models.get('hf') or {}).get('downloaded', []))}",
+            response.status_code == expected,
+            f"HTTP {response.status_code} (ожидалось {expected}), ollama={ollama.get('available')}, "
+            f"моделей={len(ollama.get('models', []))}",
         )
     except Exception as exc:
         step("models", False, str(exc))
 
+    domains_status = 0
+    try:
+        response = client.get("/api/admin/domain")
+        domains_status = response.status_code
+        expected = 200 if ROLE == "system" else 403
+        profiles = response.json().get("profiles", []) if response.status_code == 200 else []
+        step(
+            "domains",
+            response.status_code == expected,
+            f"HTTP {response.status_code} (ожидалось {expected}), направлений={len(profiles)}",
+        )
+    except Exception as exc:
+        step("domains", False, str(exc))
+
     try:
         status = client.get("/reindex").json()
-        step("reindex-status", bool(status), f"status={status.get('status')}")
+        step("reindex-status", bool(status), f"status={status.get('status')}, done={status.get('done')}/{status.get('total')}")
     except Exception as exc:
         step("reindex-status", False, str(exc))
 
-    retr_ok = False
     try:
-        result = client.post("/retrieve", json={"query": "Как настроить систему?", "top_k": 5}).json()
-        found = len(result.get("results", []))
-        retr_ok = found >= 0
-        step("retrieve", retr_ok, f"найдено фрагментов={found}")
+        info = client.get("/collection").json()
+        points = int(info.get("points") or info.get("points_count") or 0)
+        step("collection", points > 0, f"points={points}, target={info.get('target')}")
+    except Exception as exc:
+        step("collection", False, str(exc))
+
+    results_count = 0
+    try:
+        result = client.post("/retrieve", json={"query": "установка и настройка системы", "top_k": 5}).json()
+        results_count = len(result.get("results", []))
+        step("retrieve", results_count > 0, f"найдено фрагментов={results_count}")
     except Exception as exc:
         step("retrieve", False, str(exc))
 
@@ -112,17 +154,24 @@ def main() -> int:
 
     request_ids: list[int] = []
     answers_ok = 0
+    grounded = 0
     for question in questions:
         try:
             payload = client.post("/ask", json={"question": question}).json()
             answer = (payload.get("answer") or "").strip()
             if answer:
                 answers_ok += 1
+            if payload.get("grounded"):
+                grounded += 1
             if payload.get("request_id"):
                 request_ids.append(payload["request_id"])
         except Exception as exc:
             step(f"ask: {question[:40]}", False, str(exc))
-    step("ask", answers_ok == len(questions), f"ответов={answers_ok}/{len(questions)}, модель={active_model}")
+    step(
+        "ask",
+        answers_ok == len(questions),
+        f"ответов={answers_ok}/{len(questions)}, по документации={grounded}, модель={active_model}",
+    )
 
     if request_ids:
         try:
@@ -133,12 +182,28 @@ def main() -> int:
     else:
         step("rate", False, "нет request_id для оценки")
 
-    for label, path in (("autolearn", "/api/admin/autolearn"), ("questiongen", "/api/admin/questiongen"), ("bootstrap", "/api/admin/bootstrap")):
+    for label, path in (
+        ("autolearn", "/api/admin/autolearn"),
+        ("questiongen", "/api/admin/questiongen"),
+        ("bootstrap", "/api/admin/bootstrap"),
+        ("generated-questions", "/api/admin/questiongen/generated?limit=5"),
+        ("question-clusters", "/api/admin/questiongen/clusters"),
+    ):
         try:
             data = client.get(path).json()
             step(label, isinstance(data, dict), "получен")
         except Exception as exc:
             step(label, False, str(exc))
+
+    try:
+        data = client.post("/api/admin/questiongen/similarity").json()
+        step(
+            "similarity",
+            "analyzed" in data,
+            f"analyzed={data.get('analyzed')}, clusters={data.get('clusters')}, duplicates={data.get('duplicates')}",
+        )
+    except Exception as exc:
+        step("similarity", False, str(exc))
 
     try:
         docs = client.get("/api/admin/docs?limit=5&offset=0").json()
@@ -156,7 +221,7 @@ def main() -> int:
     except Exception as exc:
         step("verify", False, str(exc))
 
-    if args.all_models:
+    if args.all_models and models_status == 200:
         available = (models.get("ollama") or {}).get("models", [])
         for item in available:
             name = item.get("name")
@@ -175,10 +240,10 @@ def main() -> int:
             except Exception as exc:
                 step("restore-model", False, str(exc))
 
-    return finish(args, health)
+    return finish(args, health, {"role": ROLE, "models_status": models_status, "domains_status": domains_status})
 
 
-def finish(args, health: dict) -> int:
+def finish(args, health: dict, extra: dict | None = None) -> int:
     total = len(STEPS)
     failed = [s for s in STEPS if not s["ok"]]
     passed = total - len(failed)
@@ -186,6 +251,7 @@ def finish(args, health: dict) -> int:
         f"# Супер-тест {datetime.now().isoformat(timespec='seconds')}",
         "",
         f"База: {args.base}",
+        f"Роль: {(extra or {}).get('role', '—')}",
         f"Модель: {health.get('llm_model', '—')} · эмбеддинги: {health.get('embedding_model', '—')}",
         f"Устройство: {json.dumps(health.get('device', {}), ensure_ascii=False)}",
         "",

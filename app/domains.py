@@ -1175,7 +1175,6 @@ SEED: list[dict] = [
         "settings": {"LLM_TEMPERATURE": "0.1", "RETRIEVE_TOP_K": "8", "LESSONS_MAX": "3"},
         "temperature": 0.1,
         "allow_inference": False,
-        "log_analysis": True,
     },
     {
         "slug": "personnel",
@@ -1286,7 +1285,6 @@ def _insert_item(item: dict, base: str) -> dict:
         sample_questions=item.get("sample_questions", []),
         temperature=item.get("temperature"),
         allow_inference=bool(item.get("allow_inference", False)),
-        log_analysis=bool(item.get("log_analysis", False)),
         settings=item.get("settings") or {},
         synonyms=item.get("synonyms") or {},
         is_builtin=True,
@@ -1334,10 +1332,6 @@ def _migrate_seed() -> None:
             item.get("allow_inference")
         ):
             fields["allow_inference"] = bool(item.get("allow_inference"))
-        if "log_analysis" in item and bool(existing.get("log_analysis")) != bool(
-            item.get("log_analysis")
-        ):
-            fields["log_analysis"] = bool(item.get("log_analysis"))
         if item.get("settings") is not None and existing.get("settings") != item.get("settings"):
             fields["settings"] = item.get("settings") or {}
         if item.get("synonyms") is not None and existing.get("synonyms") != item.get("synonyms"):
@@ -1453,11 +1447,6 @@ def allow_inference() -> bool:
     return bool(current().get("allow_inference"))
 
 
-def log_analysis() -> bool:
-    """Умеет ли активное направление разбирать логи по указанному пути."""
-    return bool(current().get("log_analysis"))
-
-
 def capabilities() -> list[dict]:
     groups = current().get("capabilities") or []
     return [{"title": g.get("title", ""), "items": list(g.get("items", []))} for g in groups]
@@ -1493,7 +1482,6 @@ def create(data: dict) -> dict:
         sample_questions=_clean_list(data.get("sample_questions")),
         temperature=_clean_temperature(data.get("temperature")),
         allow_inference=bool(data.get("allow_inference")),
-        log_analysis=bool(data.get("log_analysis")),
         settings=_clean_settings(data.get("settings")),
         synonyms=_clean_synonyms(data.get("synonyms")),
         is_builtin=False,
@@ -1527,8 +1515,6 @@ def update(slug: str, data: dict) -> dict:
         fields["temperature"] = _clean_temperature(data.get("temperature"))
     if "allow_inference" in data:
         fields["allow_inference"] = bool(data.get("allow_inference"))
-    if "log_analysis" in data:
-        fields["log_analysis"] = bool(data.get("log_analysis"))
     if "settings" in data:
         fields["settings"] = _clean_settings(data.get("settings"))
     if "synonyms" in data:
@@ -1578,7 +1564,6 @@ def duplicate(slug: str) -> dict:
         sample_questions=source.get("sample_questions", []),
         temperature=source.get("temperature"),
         allow_inference=bool(source.get("allow_inference")),
-        log_analysis=bool(source.get("log_analysis")),
         settings=dict(source.get("settings") or {}),
         synonyms=dict(source.get("synonyms") or {}),
         is_builtin=False,

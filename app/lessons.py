@@ -8,7 +8,6 @@
 """
 
 import threading
-import time
 
 import appdb
 import config

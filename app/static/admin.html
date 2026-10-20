@@ -661,11 +661,10 @@
     <div class="card">
       <h2>Документация</h2>
       <div class="muted" style="margin-bottom:10px">
-        Файлы из data/docs и data/extracted. Свои документы можно загрузить с компьютера
-        или скачать по прямой ссылке — они попадают в папку data/uploads и сразу
-        индексируются. Удаление загруженного файла убирает его с диска и из индекса;
-        документ из data/docs удалить с диска нельзя (каталог только для чтения), но
-        его можно исключить из индекса и позже вернуть.
+        Файлы из data/docs, включая подпапку data/docs/upload. Свои документы можно
+        загрузить с компьютера или скачать по прямой ссылке — они попадают в
+        data/docs/upload и сразу индексируются. Удаление файла убирает его с диска
+        и из индекса; вернуть документ можно повторной загрузкой или индексацией.
       </div>
       <div class="row">
         <input type="file" id="doc-file" style="max-width:340px">
@@ -853,7 +852,7 @@ document.getElementById('logout').addEventListener('click', async () => {
 let currentUser = null;
 async function loadMe() {
   try {
-    const r = await fetch('/api/user');
+    const r = await fetch('/api/me');
     if (r.ok) { currentUser = await r.json(); }
   } catch (e) {}
 }
@@ -1898,7 +1897,6 @@ function renderDomainInfo(data) {
     ? 'Системная инструкция задана (' + profile.system_prompt.length + ' символов)'
     : 'Системная инструкция: общая из настроек');
   if ((profile.categories || []).length) parts.push('Категории: ' + profile.categories.join(', '));
-  parts.push('Разбор логов: ' + (profile.log_analysis ? 'включён' : 'выключен'));
   if ((profile.terminology || []).length) parts.push('Термины: ' + profile.terminology.join(', '));
   if ((profile.sample_questions || []).length) parts.push('Примеры вопросов: ' + profile.sample_questions.join('; '));
   document.getElementById('domain-extra').textContent = parts.join(' · ');
@@ -1970,10 +1968,6 @@ function renderDomEditor(item) {
       el('label', { className: 'muted' }, [
         el('input', { id: 'dom-inference', type: 'checkbox', checked: !!value.allow_inference }),
         el('span', { textContent: ' Разрешить небольшой домысел (додумывать в рамках фрагментов)' })
-      ]),
-      el('label', { className: 'muted' }, [
-        el('input', { id: 'dom-logs', type: 'checkbox', checked: !!value.log_analysis }),
-        el('span', { textContent: ' Разбор логов по пути из вопроса (папка /data/logs)' })
       ])
     ]),
     area('Что я умею (строка без «-» — раздел, строки с «- » — пункты)', 'dom-caps', formatCaps(value.capabilities || []), 8),
@@ -2094,8 +2088,7 @@ function readDomainForm() {
     settings: parseSettings(document.getElementById('dom-settings').value),
     temperature: document.getElementById('dom-temperature').value.trim() === ''
       ? null : Number(document.getElementById('dom-temperature').value),
-    allow_inference: document.getElementById('dom-inference').checked,
-    log_analysis: document.getElementById('dom-logs').checked
+    allow_inference: document.getElementById('dom-inference').checked
   };
 }
 

@@ -5,14 +5,10 @@ qdrant/
 ollama/
 .env
 data/docs/
-data/uploads
-data/extracted/
 data/app/
 data/settings/
 data/index_state/
 data/synonyms/
-data/images/
-data/logs/
 data/prompts/
 data/eval/report.json
 data/eval/super_test_*.md

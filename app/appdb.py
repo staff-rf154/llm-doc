@@ -175,7 +175,6 @@ CREATE TABLE IF NOT EXISTS domains (
     sample_questions TEXT NOT NULL DEFAULT '[]',
     temperature REAL,
     allow_inference INTEGER NOT NULL DEFAULT 0,
-    log_analysis INTEGER NOT NULL DEFAULT 0,
     settings TEXT NOT NULL DEFAULT '{}',
     synonyms TEXT NOT NULL DEFAULT '[]',
     is_builtin INTEGER NOT NULL DEFAULT 0,
@@ -194,7 +193,6 @@ CREATE TABLE IF NOT EXISTS doc_exclusions (
 CORRECTION_COLUMNS = ("doc_name", "doc_pages", "doc_ref")
 CHECK_COLUMNS = ("check_status", "check_comment", "checked_at", "check_collection")
 REQUEST_COLUMNS = ("doc_name", "doc_pages", "doc_ref", "origin")
-DOMAIN_COLUMNS = ("temperature", "allow_inference", "log_analysis")
 
 CHECK_STATUSES = ("unchecked", "verified", "review")
 
@@ -222,10 +220,6 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if "allow_inference" not in existing:
         conn.execute(
             "ALTER TABLE domains ADD COLUMN allow_inference INTEGER NOT NULL DEFAULT 0"
-        )
-    if "log_analysis" not in existing:
-        conn.execute(
-            "ALTER TABLE domains ADD COLUMN log_analysis INTEGER NOT NULL DEFAULT 0"
         )
     if "settings" not in existing:
         conn.execute(
@@ -699,6 +693,7 @@ DOMAIN_JSON_FIELDS = ("capabilities", "categories", "terminology", "sample_quest
 
 def _decode_domain(row: sqlite3.Row) -> dict:
     item = dict(row)
+    item.pop("log_analysis", None)
     for field in DOMAIN_JSON_FIELDS:
         try:
             value = json.loads(item.get(field) or "[]")
@@ -724,7 +719,6 @@ def _decode_domain(row: sqlite3.Row) -> dict:
     if item["temperature"] is not None and item["temperature"] < 0:
         item["temperature"] = None
     item["allow_inference"] = bool(item.get("allow_inference"))
-    item["log_analysis"] = bool(item.get("log_analysis"))
     return item
 
 
@@ -787,7 +781,6 @@ def insert_domain(
     sample_questions: list | None = None,
     temperature: float | None = None,
     allow_inference: bool = False,
-    log_analysis: bool = False,
     settings: dict | None = None,
     synonyms: dict | None = None,
     is_builtin: bool = False,
@@ -800,8 +793,8 @@ def insert_domain(
             INSERT INTO domains
                 (slug, title, description, system_prompt, capabilities, categories,
                  terminology, sample_questions, temperature, allow_inference,
-                 log_analysis, settings, synonyms, is_builtin, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 settings, synonyms, is_builtin, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 slug,
@@ -814,7 +807,6 @@ def insert_domain(
                 json.dumps(sample_questions or [], ensure_ascii=False),
                 temperature,
                 1 if allow_inference else 0,
-                1 if log_analysis else 0,
                 json.dumps(settings or {}, ensure_ascii=False),
                 json.dumps(synonyms or {}, ensure_ascii=False),
                 1 if is_builtin else 0,
@@ -830,7 +822,7 @@ def update_domain(slug: str, **fields) -> dict | None:
     allowed = {
         "slug", "title", "description", "system_prompt",
         "capabilities", "categories", "terminology", "sample_questions",
-        "temperature", "allow_inference", "log_analysis", "is_builtin",
+        "temperature", "allow_inference", "is_builtin",
         "settings", "synonyms",
     }
     sets: list[str] = []
@@ -844,7 +836,7 @@ def update_domain(slug: str, **fields) -> dict | None:
             value = json.dumps(value or {}, ensure_ascii=False)
         elif key == "synonyms":
             value = json.dumps(value or {}, ensure_ascii=False)
-        elif key in ("allow_inference", "log_analysis", "is_builtin"):
+        elif key in ("allow_inference", "is_builtin"):
             value = 1 if value else 0
         sets.append(f"{key} = ?")
         params.append(value)
@@ -865,31 +857,11 @@ def delete_domain(slug: str) -> bool:
         return cur.rowcount > 0
 
 
-def is_excluded(root: str, source: str) -> bool:
-    ensure_schema()
-    with connect() as conn:
-        row = conn.execute(
-            "SELECT 1 FROM doc_exclusions WHERE root = ? AND source = ?",
-            (root, source),
-        ).fetchone()
-    return row is not None
-
-
 def excluded_keys() -> set[tuple[str, str]]:
     ensure_schema()
     with connect() as conn:
         rows = conn.execute("SELECT root, source FROM doc_exclusions").fetchall()
     return {(row["root"], row["source"]) for row in rows}
-
-
-def add_exclusion(root: str, source: str) -> None:
-    ensure_schema()
-    with _LOCK, connect() as conn:
-        conn.execute(
-            "INSERT OR REPLACE INTO doc_exclusions (root, source, excluded_at) "
-            "VALUES (?, ?, ?)",
-            (root, source, now()),
-        )
 
 
 def remove_exclusion(root: str, source: str) -> None:

@@ -1,8 +1,5 @@
 """API кабинета администратора: пользователи, оценки, исправления, статистика."""
 
-import httpx
-from pathlib import Path
-
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from pydantic import BaseModel, Field
 
@@ -1134,7 +1131,6 @@ class DomainCreate(BaseModel):
     sample_questions: list[str] | None = None
     temperature: float | None = Field(default=None, ge=0, le=2)
     allow_inference: bool | None = None
-    log_analysis: bool | None = None
     synonyms: dict[str, list[str]] | None = None
     settings: dict[str, str] | None = None
 
@@ -1150,7 +1146,6 @@ class DomainUpdate(BaseModel):
     sample_questions: list[str] | None = None
     temperature: float | None = Field(default=None, ge=0, le=2)
     allow_inference: bool | None = None
-    log_analysis: bool | None = None
     synonyms: dict[str, list[str]] | None = None
     settings: dict[str, str] | None = None
 

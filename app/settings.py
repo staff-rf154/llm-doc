@@ -52,7 +52,6 @@ LESSONS = "Обучение"
 HYBRID = "Гибридный поиск"
 RERANK = "Переранжирование"
 UPLOADS = "Загрузка документов"
-LOGS = "Разбор логов"
 AUTOLEARN = "Автообучение"
 INFRA = "Инфраструктура (только чтение)"
 
@@ -183,10 +182,6 @@ PARAMS: list[Param] = [
     Param("PROMPTS_CACHE_TTL", "Кэш стартовых промтов, сек", "int", group=BEHAVIOUR),
     Param("DOCS_BASE_URL", "Базовый адрес документации", group=WEBSITES,
           hint="Префикс ссылок на документы в ответах, если ссылка не задана отдельно"),
-    Param("LOGS_MAX_CHARS", "Символов логов в ответе", "int", group=LOGS,
-          hint="Сколько символов выдержек из логов отдавать модели, остальное отбрасывается"),
-    Param("LOGS_CONTEXT_LINES", "Строк контекста вокруг ошибки", "int", group=LOGS,
-          hint="Сколько соседних строк показывать вокруг найденной важной строки"),
     Param("APP_DB", "База данных приложения", group=INFRA, editable=False),
     Param("SETTINGS_DB", "База данных настроек", group=INFRA, editable=False),
     Param("QDRANT_URL", "Адрес Qdrant", group=INFRA, editable=False),
@@ -196,10 +191,6 @@ PARAMS: list[Param] = [
     Param("DOCS_DIR", "Каталог документации", group=INFRA, editable=False),
     Param("UPLOADS_DIR", "Каталог загрузок", group=INFRA, editable=False),
     Param("EVAL_DIR", "Каталог оценок", group=INFRA, editable=False),
-    Param("LOGS_ROOT", "Корень логов (только чтение)", group=INFRA, editable=False),
-    Param("LOGS_MAX_FILES", "Максимум файлов логов", "int", group=INFRA, editable=False),
-    Param("LOGS_MAX_FILE_BYTES", "Максимум размера файла, байт", "int", group=INFRA, editable=False),
-    Param("LOGS_MAX_UNPACKED_BYTES", "Максимум распакованного, байт", "int", group=INFRA, editable=False),
     Param("PROMPTS_DB", "База стартовых промтов", group=INFRA, editable=False),
     Param("SYNONYMS_DB", "База синонимов", group=INFRA, editable=False),
     Param("ADMIN_USERNAME", "Логин администратора по умолчанию", group=INFRA, editable=False),
@@ -401,8 +392,6 @@ RANGES = {
     "QUESTIONGEN_SIM_THRESHOLD": (0.0, 1.0),
     "QUESTIONGEN_DEDUP_THRESHOLD": (0.0, 1.0),
     "LESSONS_MIN_SCORE": (0.0, 1.0),
-    "LOGS_MAX_CHARS": (1000, 200000),
-    "LOGS_CONTEXT_LINES": (0, 20),
 }
 
 
@@ -542,7 +531,6 @@ def groups() -> list[str]:
         UPLOADS,
         AUTOLEARN,
         INGEST,
-        LOGS,
         INFRA,
     ]
     present = {param.group for param in PARAMS}
