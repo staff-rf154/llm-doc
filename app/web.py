@@ -29,16 +29,18 @@ class ChatRequest(BaseModel):
     top_k: int | None = Field(default=None, ge=1, le=20)
 
 
-def _history(messages: list[Turn]) -> list[dict]:
-    turns = [{"role": "system", "content": domains.system_prompt()}]
+def _history(messages: list[Turn], tenant: str | None = None) -> list[dict]:
+    turns = [{"role": "system", "content": domains.system_prompt(tenant or appdb.DEFAULT_TENANT)}]
     for turn in messages[:-1]:
         turns.append({"role": turn.role, "content": turn.content})
     turns.append({"role": "user", "content": messages[-1].content})
     return turns
 
 
-def _autolearn(request_id: int) -> None:
+def _autolearn(request_id: int, tenant: str | None = None) -> None:
     """Автоматическая оценка запроса после ответа (без LLM, дёшево)."""
+    if tenant not in (None, appdb.DEFAULT_TENANT):
+        return
     try:
         import autolearn
 
@@ -49,6 +51,7 @@ def _autolearn(request_id: int) -> None:
 
 def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
     question = req.messages[-1].content
+    tenant = auth.tenant_scope(user) or appdb.DEFAULT_TENANT
     started = time.time()
 
     if is_capabilities_question(question):
@@ -67,7 +70,7 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
             media_type="text/event-stream",
         )
 
-    exact = rag.find_correction(question)
+    exact = rag.find_correction(question, tenant)
     if exact:
         answer_text = exact["answer"] + rag.reference_block(
             exact.get("doc_name", ""), exact.get("doc_pages", "")
@@ -97,7 +100,7 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
             media_type="text/event-stream",
         )
 
-    chunks = rag.retrieve(question, req.top_k)
+    chunks = rag.retrieve(question, req.top_k, tenant=tenant)
 
     if not chunks:
         text = rag.empty_index_message()
@@ -114,7 +117,9 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
             media_type="text/event-stream",
         )
 
-    prompt = rag.build_prompt(question, chunks, rag.correction_examples(question))
+    prompt = rag.build_prompt(
+        question, chunks, rag.correction_examples(question, tenant), tenant
+    )
     client = rag.get_client()
 
     def generate():
@@ -127,8 +132,11 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
             try:
                 stream = client.chat.completions.create(
                     model=settings.value("LLM_MODEL", config.LLM_MODEL),
-                    messages=_history(req.messages)[:-1] + [{"role": "user", "content": prompt}],
-                    temperature=settings.float_value("LLM_TEMPERATURE"),
+                    messages=_history(req.messages, tenant)[:-1]
+                    + [{"role": "user", "content": prompt}],
+                    temperature=domains.temperature(tenant)
+                    if domains.temperature(tenant) is not None
+                    else settings.float_value("LLM_TEMPERATURE"),
                     stream=True,
                 )
                 for event in stream:
@@ -175,7 +183,7 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
             int((time.time() - started) * 1000),
             origin="web",
         )
-        _autolearn(request_id)
+        _autolearn(request_id, tenant)
         yield _sse_event(
             {
                 "type": "sources",

@@ -15,6 +15,7 @@ import config
 import index_state
 import metrics
 import settings
+import tenancy
 import vectorstore as vs
 from loaders import iter_documents, load_document
 
@@ -59,6 +60,7 @@ def chunk_points(
             "page": (pages[index] if pages and index < len(pages) else 0),
             "title": title,
             "kind": "file",
+            "tenant_id": tenancy.tenant_of_rel(rel),
         }
         if parents and index < len(parents):
             parent = parents[index]
@@ -167,6 +169,7 @@ def upsert_batch(client, collection: str, batch: list[dict]) -> None:
                     "page": p.get("page", 0),
                     "title": p.get("title", ""),
                     "kind": p.get("kind", "file"),
+                    "tenant_id": p.get("tenant_id") or tenancy.tenant_of_rel(p["source"]),
                     "url": p.get("url", "") or origin_url(p["source"]),
                     **(
                         {

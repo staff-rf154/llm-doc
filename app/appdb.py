@@ -18,12 +18,18 @@ _LOCK = threading.RLock()
 _INIT_DONE = False
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS tenants (
+    slug TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
 CREATE TABLE IF NOT EXISTS users (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     username TEXT NOT NULL UNIQUE,
     salt TEXT NOT NULL,
     password_hash TEXT NOT NULL,
     role TEXT NOT NULL DEFAULT 'user',
+    tenant_id TEXT NOT NULL DEFAULT 'default',
     active INTEGER NOT NULL DEFAULT 1,
     hidden INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL
@@ -40,6 +46,7 @@ CREATE TABLE IF NOT EXISTS requests (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     user_id INTEGER,
     username TEXT NOT NULL DEFAULT '',
+    tenant_id TEXT NOT NULL DEFAULT 'default',
     question TEXT NOT NULL,
     answer TEXT NOT NULL DEFAULT '',
     grounded INTEGER NOT NULL DEFAULT 0,
@@ -64,6 +71,7 @@ CREATE TABLE IF NOT EXISTS ratings (
 );
 CREATE TABLE IF NOT EXISTS corrections (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
     question TEXT NOT NULL,
     answer TEXT NOT NULL,
     doc_name TEXT NOT NULL DEFAULT '',
@@ -76,6 +84,7 @@ CREATE TABLE IF NOT EXISTS corrections (
 );
 CREATE TABLE IF NOT EXISTS lessons (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
     topic TEXT NOT NULL,
     question TEXT NOT NULL DEFAULT '',
     answer TEXT NOT NULL DEFAULT '',
@@ -165,7 +174,8 @@ CREATE INDEX IF NOT EXISTS idx_genq_cluster ON generated_questions(cluster_id);
 CREATE INDEX IF NOT EXISTS idx_genq_source ON generated_questions(source);
 CREATE TABLE IF NOT EXISTS domains (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    slug TEXT NOT NULL UNIQUE,
+    tenant_id TEXT NOT NULL DEFAULT 'default',
+    slug TEXT NOT NULL,
     title TEXT NOT NULL,
     description TEXT NOT NULL DEFAULT '',
     system_prompt TEXT NOT NULL DEFAULT '',
@@ -179,8 +189,10 @@ CREATE TABLE IF NOT EXISTS domains (
     synonyms TEXT NOT NULL DEFAULT '[]',
     is_builtin INTEGER NOT NULL DEFAULT 0,
     created_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
+    updated_at TEXT NOT NULL,
+    UNIQUE (tenant_id, slug)
 );
+
 
 CREATE TABLE IF NOT EXISTS doc_exclusions (
     root TEXT NOT NULL,
@@ -199,6 +211,11 @@ CHECK_STATUSES = ("unchecked", "verified", "review")
 
 def _migrate(conn: sqlite3.Connection) -> None:
     for table, columns in (
+        ("users", ("tenant_id",)),
+        ("requests", ("tenant_id",)),
+        ("corrections", ("tenant_id",)),
+        ("domains", ("tenant_id",)),
+        ("lessons", ("tenant_id",)),
         ("corrections", CORRECTION_COLUMNS),
         ("corrections", CHECK_COLUMNS),
         ("requests", REQUEST_COLUMNS),
@@ -229,6 +246,57 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE domains ADD COLUMN synonyms TEXT NOT NULL DEFAULT '[]'"
         )
+    domain_sql = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'domains'"
+    ).fetchone()
+    if domain_sql and "UNIQUE (tenant_id, slug)" not in (domain_sql["sql"] or ""):
+        columns = (
+            "id, tenant_id, slug, title, description, system_prompt, capabilities, "
+            "categories, terminology, sample_questions, temperature, allow_inference, "
+            "settings, synonyms, is_builtin, created_at, updated_at"
+        )
+        conn.execute("ALTER TABLE domains RENAME TO domains_old")
+        conn.execute(
+            """
+            CREATE TABLE domains (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                tenant_id TEXT NOT NULL DEFAULT 'default',
+                slug TEXT NOT NULL,
+                title TEXT NOT NULL,
+                description TEXT NOT NULL DEFAULT '',
+                system_prompt TEXT NOT NULL DEFAULT '',
+                capabilities TEXT NOT NULL DEFAULT '[]',
+                categories TEXT NOT NULL DEFAULT '[]',
+                terminology TEXT NOT NULL DEFAULT '[]',
+                sample_questions TEXT NOT NULL DEFAULT '[]',
+                temperature REAL,
+                allow_inference INTEGER NOT NULL DEFAULT 0,
+                settings TEXT NOT NULL DEFAULT '{}',
+                synonyms TEXT NOT NULL DEFAULT '[]',
+                is_builtin INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE (tenant_id, slug)
+            )
+            """
+        )
+        conn.execute(
+            f"INSERT INTO domains ({columns}) SELECT {columns} FROM domains_old"
+        )
+        conn.execute("DROP TABLE domains_old")
+    for table in ("users", "requests", "corrections", "domains", "lessons"):
+        conn.execute(
+            f"UPDATE {table} SET tenant_id = ? WHERE tenant_id IS NULL OR tenant_id = ''",
+            (DEFAULT_TENANT,),
+        )
+    for statement in (
+        "CREATE INDEX IF NOT EXISTS idx_users_tenant ON users(tenant_id)",
+        "CREATE INDEX IF NOT EXISTS idx_requests_tenant ON requests(tenant_id)",
+        "CREATE INDEX IF NOT EXISTS idx_corrections_tenant ON corrections(tenant_id)",
+        "CREATE INDEX IF NOT EXISTS idx_lessons_tenant ON lessons(tenant_id)",
+        "CREATE INDEX IF NOT EXISTS idx_domains_tenant ON domains(tenant_id)",
+    ):
+        conn.execute(statement)
 
 SESSION_DAYS = 14
 
@@ -252,7 +320,56 @@ def ensure_schema() -> None:
         with connect() as conn:
             conn.executescript(SCHEMA)
             _migrate(conn)
+            _ensure_default_tenant(conn)
         _INIT_DONE = True
+
+
+DEFAULT_TENANT = "default"
+TENANT_RE = re.compile(r"^[a-z0-9][a-z0-9_-]{1,31}$")
+
+
+def _ensure_default_tenant(conn: sqlite3.Connection) -> None:
+    conn.execute(
+        "INSERT OR IGNORE INTO tenants (slug, title, created_at) VALUES (?, ?, ?)",
+        (DEFAULT_TENANT, "Основной", now()),
+    )
+
+
+def tenant_exists(slug: str) -> bool:
+    ensure_schema()
+    with connect() as conn:
+        row = conn.execute("SELECT 1 FROM tenants WHERE slug = ?", (slug,)).fetchone()
+    return bool(row)
+
+
+def list_tenants() -> list[dict]:
+    ensure_schema()
+    with connect() as conn:
+        rows = conn.execute(
+            """
+            SELECT t.slug, t.title, t.created_at,
+                   (SELECT COUNT(*) FROM users u WHERE u.tenant_id = t.slug AND u.hidden = 0) AS users
+            FROM tenants t ORDER BY t.slug
+            """
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def create_tenant(slug: str, title: str = "") -> dict:
+    ensure_schema()
+    slug = (slug or "").strip().lower()
+    if not TENANT_RE.match(slug):
+        raise ValueError("Код тенанта: 2–32 символа, латиница, цифры, дефис или подчёркивание")
+    title = (title or slug).strip()[:120]
+    with _LOCK, connect() as conn:
+        try:
+            conn.execute(
+                "INSERT INTO tenants (slug, title, created_at) VALUES (?, ?, ?)",
+                (slug, title, now()),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("Тенант с таким кодом уже существует") from exc
+    return {"slug": slug, "title": title}
 
 
 def now() -> str:
@@ -272,16 +389,25 @@ def verify_password(password: str, salt: str, expected: str) -> bool:
     return hmac.compare_digest(digest, expected)
 
 
-def create_user(username: str, password: str, role: str = "user", hidden: bool = False) -> dict:
+def create_user(
+    username: str,
+    password: str,
+    role: str = "user",
+    hidden: bool = False,
+    tenant_id: str = DEFAULT_TENANT,
+) -> dict:
     ensure_schema()
+    tenant_id = (tenant_id or DEFAULT_TENANT).strip() or DEFAULT_TENANT
+    if not tenant_exists(tenant_id):
+        raise ValueError(f"Неизвестный тенант: {tenant_id}")
     salt, digest = hash_password(password)
     with _LOCK, connect() as conn:
         cur = conn.execute(
             """
-            INSERT INTO users (username, salt, password_hash, role, active, hidden, created_at)
-            VALUES (?, ?, ?, ?, 1, ?, ?)
+            INSERT INTO users (username, salt, password_hash, role, tenant_id, active, hidden, created_at)
+            VALUES (?, ?, ?, ?, ?, 1, ?, ?)
             """,
-            (username.strip(), salt, digest, role, 1 if hidden else 0, now()),
+            (username.strip(), salt, digest, role, tenant_id, 1 if hidden else 0, now()),
         )
         user_id = cur.lastrowid
     return get_user(user_id) or {}
@@ -291,7 +417,7 @@ def get_user(user_id: int) -> dict | None:
     ensure_schema()
     with connect() as conn:
         row = conn.execute(
-            "SELECT id, username, role, active, hidden, created_at FROM users WHERE id = ?",
+            "SELECT id, username, role, tenant_id, active, hidden, created_at FROM users WHERE id = ?",
             (user_id,),
         ).fetchone()
     return dict(row) if row else None
@@ -302,7 +428,7 @@ def get_user_by_name(username: str) -> dict | None:
     with connect() as conn:
         row = conn.execute(
             """
-            SELECT id, username, salt, password_hash, role, active, hidden, created_at
+            SELECT id, username, salt, password_hash, role, tenant_id, active, hidden, created_at
             FROM users WHERE username = ?
             """,
             (username.strip(),),
@@ -310,20 +436,26 @@ def get_user_by_name(username: str) -> dict | None:
     return dict(row) if row else None
 
 
-def list_users() -> list[dict]:
+def list_users(tenant: str | None = None) -> list[dict]:
     ensure_schema()
+    where = "WHERE u.hidden = 0"
+    params: list = []
+    if tenant:
+        where += " AND u.tenant_id = ?"
+        params.append(tenant)
     with connect() as conn:
         rows = conn.execute(
-            """
-            SELECT u.id, u.username, u.role, u.active, u.created_at,
+            f"""
+            SELECT u.id, u.username, u.role, u.tenant_id, u.active, u.created_at,
                    (SELECT COUNT(*) FROM requests r WHERE r.user_id = u.id) AS requests,
                    (SELECT COUNT(*) FROM ratings t JOIN requests r2 ON r2.id = t.request_id
                      WHERE r2.user_id = u.id AND t.vote = 'up') AS likes,
                    (SELECT COUNT(*) FROM ratings t JOIN requests r2 ON r2.id = t.request_id
                      WHERE r2.user_id = u.id AND t.vote = 'down') AS dislikes,
                    (SELECT MAX(r3.created_at) FROM requests r3 WHERE r3.user_id = u.id) AS last_request
-            FROM users u WHERE u.hidden = 0 ORDER BY u.id
-            """
+            FROM users u {where} ORDER BY u.id
+            """,
+            params,
         ).fetchall()
     return [dict(row) for row in rows]
 
@@ -347,6 +479,14 @@ def set_active(user_id: int, active: bool) -> None:
         )
         if not active:
             conn.execute("DELETE FROM sessions WHERE user_id = ?", (user_id,))
+
+
+def set_tenant(user_id: int, tenant_id: str) -> None:
+    ensure_schema()
+    if not tenant_exists(tenant_id):
+        raise ValueError(f"Неизвестный тенант: {tenant_id}")
+    with _LOCK, connect() as conn:
+        conn.execute("UPDATE users SET tenant_id = ? WHERE id = ?", (tenant_id, user_id))
 
 
 def set_role(user_id: int, role: str) -> None:
@@ -391,7 +531,7 @@ def user_by_token(token: str | None) -> dict | None:
     with connect() as conn:
         row = conn.execute(
             """
-            SELECT u.id, u.username, u.role, u.active, u.hidden
+            SELECT u.id, u.username, u.role, u.tenant_id, u.active, u.hidden
             FROM sessions s JOIN users u ON u.id = s.user_id
             WHERE s.token = ? AND s.expires_at > ?
             """,
@@ -466,13 +606,14 @@ def log_request(
         cur = conn.execute(
             """
             INSERT INTO requests
-                (user_id, username, question, answer, grounded, corrected,
+                (user_id, username, tenant_id, question, answer, grounded, corrected,
                  doc_name, doc_pages, doc_ref, sources, latency_ms, origin, created_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 (user or {}).get("id"),
                 (user or {}).get("username", ""),
+                (user or {}).get("tenant_id") or DEFAULT_TENANT,
                 question,
                 answer,
                 1 if grounded else 0,
@@ -506,6 +647,7 @@ def list_requests(
     origin: str | None = None,
     sort: str = "date",
     order: str = "desc",
+    tenant: str | None = None,
 ) -> list[dict]:
     ensure_schema()
     query = """
@@ -517,6 +659,9 @@ def list_requests(
         WHERE 1 = 1
     """
     params: list = []
+    if tenant:
+        query += " AND r.tenant_id = ?"
+        params.append(tenant)
     if username:
         query += " AND r.username = ?"
         params.append(username)
@@ -549,42 +694,51 @@ def create_lesson(
     focus: str,
     author: str,
     status: str = "active",
+    tenant_id: str = DEFAULT_TENANT,
 ) -> dict:
     ensure_schema()
     with _LOCK, connect() as conn:
         cur = conn.execute(
             """
-            INSERT INTO lessons (topic, question, answer, focus, author, status, uses,
+            INSERT INTO lessons (tenant_id, topic, question, answer, focus, author, status, uses,
                                  created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, 0, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 0, ?, ?)
             """,
-            (topic, question, answer, focus, author, status, now(), now()),
+            (tenant_id or DEFAULT_TENANT, topic, question, answer, focus, author, status, now(), now()),
         )
         lesson_id = int(cur.lastrowid)
     return get_lesson(lesson_id) or {}
 
 
-def get_lesson(lesson_id: int) -> dict | None:
+def get_lesson(lesson_id: int, tenant: str | None = None) -> dict | None:
     ensure_schema()
+    query = "SELECT * FROM lessons WHERE id = ?"
+    params: list = [lesson_id]
+    if tenant:
+        query += " AND tenant_id = ?"
+        params.append(tenant)
     with connect() as conn:
-        row = conn.execute("SELECT * FROM lessons WHERE id = ?", (lesson_id,)).fetchone()
+        row = conn.execute(query, params).fetchone()
     return dict(row) if row else None
 
 
-def list_lessons(status: str | None = None) -> list[dict]:
+def list_lessons(status: str | None = None, tenant: str | None = None) -> list[dict]:
     ensure_schema()
-    query = "SELECT * FROM lessons"
+    query = "SELECT * FROM lessons WHERE 1 = 1"
     params: list = []
     if status:
-        query += " WHERE status = ?"
+        query += " AND status = ?"
         params.append(status)
+    if tenant:
+        query += " AND tenant_id = ?"
+        params.append(tenant)
     query += " ORDER BY id DESC"
     with connect() as conn:
         rows = conn.execute(query, params).fetchall()
     return [dict(row) for row in rows]
 
 
-def update_lesson(lesson_id: int, **fields) -> None:
+def update_lesson(lesson_id: int, tenant: str | None = None, **fields) -> None:
     ensure_schema()
     allowed = ("topic", "question", "answer", "focus", "status")
     sets = [f"{key} = ?" for key, value in fields.items() if key in allowed and value is not None]
@@ -593,14 +747,23 @@ def update_lesson(lesson_id: int, **fields) -> None:
     params = [value for key, value in fields.items() if key in allowed and value is not None]
     sets.append("updated_at = ?")
     params.extend([now(), lesson_id])
+    where = "id = ?"
+    if tenant:
+        where += " AND tenant_id = ?"
+        params.append(tenant)
     with _LOCK, connect() as conn:
-        conn.execute(f"UPDATE lessons SET {', '.join(sets)} WHERE id = ?", params)
+        conn.execute(f"UPDATE lessons SET {', '.join(sets)} WHERE {where}", params)
 
 
-def delete_lesson(lesson_id: int) -> bool:
+def delete_lesson(lesson_id: int, tenant: str | None = None) -> bool:
     ensure_schema()
+    query = "DELETE FROM lessons WHERE id = ?"
+    params: list = [lesson_id]
+    if tenant:
+        query += " AND tenant_id = ?"
+        params.append(tenant)
     with _LOCK, connect() as conn:
-        cur = conn.execute("DELETE FROM lessons WHERE id = ?", (lesson_id,))
+        cur = conn.execute(query, params)
     return bool(cur.rowcount)
 
 
@@ -747,26 +910,40 @@ def _decode_synonyms(value) -> dict[str, list[str]]:
     return result
 
 
-def list_domains() -> list[dict]:
+def list_domains(tenant: str | None = None) -> list[dict]:
     ensure_schema()
+    query = "SELECT * FROM domains"
+    params: list = []
+    if tenant:
+        query += " WHERE tenant_id = ?"
+        params.append(tenant)
+    query += " ORDER BY is_builtin DESC, id"
     with connect() as conn:
-        rows = conn.execute(
-            "SELECT * FROM domains ORDER BY is_builtin DESC, id"
-        ).fetchall()
+        rows = conn.execute(query, params).fetchall()
     return [_decode_domain(row) for row in rows]
 
 
-def get_domain_by_slug(slug: str) -> dict | None:
+def get_domain_by_slug(slug: str, tenant: str | None = None) -> dict | None:
     ensure_schema()
+    query = "SELECT * FROM domains WHERE slug = ?"
+    params: list = [slug]
+    if tenant:
+        query += " AND tenant_id = ?"
+        params.append(tenant)
     with connect() as conn:
-        row = conn.execute("SELECT * FROM domains WHERE slug = ?", (slug,)).fetchone()
+        row = conn.execute(query, params).fetchone()
     return _decode_domain(row) if row else None
 
 
-def count_domains() -> int:
+def count_domains(tenant: str | None = None) -> int:
     ensure_schema()
+    query = "SELECT COUNT(*) AS n FROM domains"
+    params: list = []
+    if tenant:
+        query += " WHERE tenant_id = ?"
+        params.append(tenant)
     with connect() as conn:
-        row = conn.execute("SELECT COUNT(*) AS n FROM domains").fetchone()
+        row = conn.execute(query, params).fetchone()
     return int(row["n"])
 
 
@@ -784,6 +961,7 @@ def insert_domain(
     settings: dict | None = None,
     synonyms: dict | None = None,
     is_builtin: bool = False,
+    tenant_id: str = DEFAULT_TENANT,
 ) -> dict:
     ensure_schema()
     stamp = now()
@@ -791,12 +969,13 @@ def insert_domain(
         conn.execute(
             """
             INSERT INTO domains
-                (slug, title, description, system_prompt, capabilities, categories,
+                (tenant_id, slug, title, description, system_prompt, capabilities, categories,
                  terminology, sample_questions, temperature, allow_inference,
                  settings, synonyms, is_builtin, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
+                tenant_id or DEFAULT_TENANT,
                 slug,
                 title,
                 description,
@@ -814,10 +993,10 @@ def insert_domain(
                 stamp,
             ),
         )
-    return get_domain_by_slug(slug) or {}
+    return get_domain_by_slug(slug, tenant_id or DEFAULT_TENANT) or {}
 
 
-def update_domain(slug: str, **fields) -> dict | None:
+def update_domain(slug: str, tenant: str | None = None, **fields) -> dict | None:
     ensure_schema()
     allowed = {
         "slug", "title", "description", "system_prompt",
@@ -841,19 +1020,28 @@ def update_domain(slug: str, **fields) -> dict | None:
         sets.append(f"{key} = ?")
         params.append(value)
     if not sets:
-        return get_domain_by_slug(slug)
+        return get_domain_by_slug(slug, tenant)
     sets.append("updated_at = ?")
     params.append(now())
     params.append(slug)
+    where = "slug = ?"
+    if tenant:
+        where += " AND tenant_id = ?"
+        params.append(tenant)
     with _LOCK, connect() as conn:
-        conn.execute(f"UPDATE domains SET {', '.join(sets)} WHERE slug = ?", params)
-    return get_domain_by_slug(fields.get("slug", slug))
+        conn.execute(f"UPDATE domains SET {', '.join(sets)} WHERE {where}", params)
+    return get_domain_by_slug(fields.get("slug", slug), tenant)
 
 
-def delete_domain(slug: str) -> bool:
+def delete_domain(slug: str, tenant: str | None = None) -> bool:
     ensure_schema()
+    query = "DELETE FROM domains WHERE slug = ?"
+    params: list = [slug]
+    if tenant:
+        query += " AND tenant_id = ?"
+        params.append(tenant)
     with _LOCK, connect() as conn:
-        cur = conn.execute("DELETE FROM domains WHERE slug = ?", (slug,))
+        cur = conn.execute(query, params)
         return cur.rowcount > 0
 
 
@@ -873,13 +1061,16 @@ def remove_exclusion(root: str, source: str) -> None:
         )
 
 
-def correction_ids_by_question() -> dict[str, int]:
+def correction_ids_by_question(tenant: str | None = None) -> dict[str, int]:
     """Карта «вопрос в нижнем регистре» -> id исправления."""
     ensure_schema()
+    query = "SELECT id, question FROM corrections WHERE status = 'active'"
+    params: list = []
+    if tenant:
+        query += " AND tenant_id = ?"
+        params.append(tenant)
     with connect() as conn:
-        rows = conn.execute(
-            "SELECT id, question FROM corrections WHERE status = 'active'"
-        ).fetchall()
+        rows = conn.execute(query, params).fetchall()
     return {row["question"].strip().lower(): int(row["id"]) for row in rows if row["question"]}
 
 
@@ -888,6 +1079,7 @@ def count_requests(
     username: str | None = None,
     search: str | None = None,
     origin: str | None = None,
+    tenant: str | None = None,
 ) -> int:
     ensure_schema()
     query = """
@@ -895,6 +1087,9 @@ def count_requests(
         LEFT JOIN ratings t ON t.request_id = r.id WHERE 1 = 1
     """
     params: list = []
+    if tenant:
+        query += " AND r.tenant_id = ?"
+        params.append(tenant)
     if username:
         query += " AND r.username = ?"
         params.append(username)
@@ -939,37 +1134,44 @@ def create_correction(
     doc_name: str = "",
     doc_pages: str = "",
     doc_ref: str = "",
+    tenant_id: str = DEFAULT_TENANT,
 ) -> dict:
     ensure_schema()
     with _LOCK, connect() as conn:
         cur = conn.execute(
             """
             INSERT INTO corrections
-                (question, answer, doc_name, doc_pages, doc_ref, status, author, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, 'active', ?, ?, ?)
+                (tenant_id, question, answer, doc_name, doc_pages, doc_ref, status, author, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, 'active', ?, ?, ?)
             """,
-            (question, answer, doc_name, doc_pages, doc_ref, author, now(), now()),
+            (tenant_id or DEFAULT_TENANT, question, answer, doc_name, doc_pages, doc_ref, author, now(), now()),
         )
         correction_id = int(cur.lastrowid)
     return get_correction(correction_id) or {}
 
 
-def get_correction(correction_id: int) -> dict | None:
+def get_correction(correction_id: int, tenant: str | None = None) -> dict | None:
     ensure_schema()
+    query = "SELECT * FROM corrections WHERE id = ?"
+    params: list = [correction_id]
+    if tenant:
+        query += " AND tenant_id = ?"
+        params.append(tenant)
     with connect() as conn:
-        row = conn.execute(
-            "SELECT * FROM corrections WHERE id = ?", (correction_id,)
-        ).fetchone()
+        row = conn.execute(query, params).fetchone()
     return dict(row) if row else None
 
 
-def list_corrections(status: str | None = None) -> list[dict]:
+def list_corrections(status: str | None = None, tenant: str | None = None) -> list[dict]:
     ensure_schema()
-    query = "SELECT * FROM corrections"
+    query = "SELECT * FROM corrections WHERE 1 = 1"
     params: list = []
     if status:
-        query += " WHERE status = ?"
+        query += " AND status = ?"
         params.append(status)
+    if tenant:
+        query += " AND tenant_id = ?"
+        params.append(tenant)
     query += " ORDER BY id DESC"
     with connect() as conn:
         rows = conn.execute(query, params).fetchall()
@@ -984,6 +1186,7 @@ def update_correction(
     doc_name: str | None = None,
     doc_pages: str | None = None,
     doc_ref: str | None = None,
+    tenant: str | None = None,
 ) -> None:
     ensure_schema()
     fields = []
@@ -1004,14 +1207,23 @@ def update_correction(
     fields.append("updated_at = ?")
     params.append(now())
     params.append(correction_id)
+    where = "id = ?"
+    if tenant:
+        where += " AND tenant_id = ?"
+        params.append(tenant)
     with _LOCK, connect() as conn:
-        conn.execute(f"UPDATE corrections SET {', '.join(fields)} WHERE id = ?", params)
+        conn.execute(f"UPDATE corrections SET {', '.join(fields)} WHERE {where}", params)
 
 
-def delete_correction(correction_id: int) -> None:
+def delete_correction(correction_id: int, tenant: str | None = None) -> None:
     ensure_schema()
+    query = "DELETE FROM corrections WHERE id = ?"
+    params: list = [correction_id]
+    if tenant:
+        query += " AND tenant_id = ?"
+        params.append(tenant)
     with _LOCK, connect() as conn:
-        conn.execute("DELETE FROM corrections WHERE id = ?", (correction_id,))
+        conn.execute(query, params)
 
 
 def set_check(
@@ -1034,29 +1246,36 @@ def set_check(
         )
 
 
-def reset_checks() -> None:
+def reset_checks(tenant: str | None = None) -> None:
     ensure_schema()
+    query = """
+        UPDATE corrections
+        SET check_status = '', check_comment = '', checked_at = '', check_collection = ''
+        WHERE 1 = 1
+    """
+    params: list = []
+    if tenant:
+        query += " AND tenant_id = ?"
+        params.append(tenant)
     with _LOCK, connect() as conn:
-        conn.execute(
-            """
-            UPDATE corrections
-            SET check_status = '', check_comment = '', checked_at = '', check_collection = ''
-            """
-        )
+        conn.execute(query, params)
 
 
-def check_summary() -> dict:
+def check_summary(tenant: str | None = None) -> dict:
     ensure_schema()
-    with connect() as conn:
-        row = conn.execute(
-            """
+    query = """
             SELECT COUNT(*) AS total,
                    SUM(CASE WHEN check_status = 'verified' THEN 1 ELSE 0 END) AS verified,
                    SUM(CASE WHEN check_status = 'review' THEN 1 ELSE 0 END) AS review,
                    SUM(CASE WHEN check_status = '' THEN 1 ELSE 0 END) AS unchecked
             FROM corrections WHERE status = 'active'
-            """
-        ).fetchone()
+    """
+    params: list = []
+    if tenant:
+        query += " AND tenant_id = ?"
+        params.append(tenant)
+    with connect() as conn:
+        row = conn.execute(query, params).fetchone()
     return {
         "total": int(row["total"]),
         "verified": int(row["verified"] or 0),
@@ -1065,12 +1284,17 @@ def check_summary() -> dict:
     }
 
 
-def stats_by_user() -> list[dict]:
+def stats_by_user(tenant: str | None = None) -> list[dict]:
     ensure_schema()
+    where = "WHERE u.hidden = 0"
+    params: list = []
+    if tenant:
+        where += " AND u.tenant_id = ?"
+        params.append(tenant)
     with connect() as conn:
         rows = conn.execute(
-            """
-            SELECT u.id AS user_id, u.username, u.role, u.active, u.created_at,
+            f"""
+            SELECT u.id AS user_id, u.username, u.role, u.tenant_id, u.active, u.created_at,
                    COUNT(r.id) AS requests,
                    COALESCE(SUM(t.vote = 'up'), 0) AS likes,
                    COALESCE(SUM(t.vote = 'down'), 0) AS dislikes,
@@ -1078,66 +1302,109 @@ def stats_by_user() -> list[dict]:
             FROM users u
             LEFT JOIN requests r ON r.user_id = u.id
             LEFT JOIN ratings t ON t.request_id = r.id
-            WHERE u.hidden = 0
+            {where}
             GROUP BY u.id ORDER BY requests DESC, u.username
-            """
+            """,
+            params,
         ).fetchall()
     return [dict(row) for row in rows]
 
 
-def stats_by_day(days: int = 30) -> list[dict]:
+def stats_by_day(days: int = 30, tenant: str | None = None) -> list[dict]:
     ensure_schema()
-    with connect() as conn:
-        rows = conn.execute(
-            """
+    query = """
             SELECT substr(created_at, 1, 10) AS day,
                    COUNT(*) AS requests,
                    COUNT(DISTINCT username) AS users
             FROM requests
             WHERE created_at >= datetime('now', ?)
-            GROUP BY day ORDER BY day
-            """,
-            (f"-{int(days)} days",),
-        ).fetchall()
+    """
+    params: list = [f"-{int(days)} days"]
+    if tenant:
+        query += " AND tenant_id = ?"
+        params.append(tenant)
+    query += " GROUP BY day ORDER BY day"
+    with connect() as conn:
+        rows = conn.execute(query, params).fetchall()
     return [dict(row) for row in rows]
 
 
-def top_questions(limit: int = 20) -> list[dict]:
+def top_questions(limit: int = 20, tenant: str | None = None) -> list[dict]:
     ensure_schema()
-    with connect() as conn:
-        rows = conn.execute(
-            """
+    query = """
             SELECT question, COUNT(*) AS n,
                    SUM(CASE WHEN vote = 'up' THEN 1 ELSE 0 END) AS likes,
                    SUM(CASE WHEN vote = 'down' THEN 1 ELSE 0 END) AS dislikes
             FROM requests LEFT JOIN ratings ON ratings.request_id = requests.id
-            GROUP BY question ORDER BY n DESC, question LIMIT ?
-            """,
-            (limit,),
-        ).fetchall()
+    """
+    params: list = []
+    if tenant:
+        query += " WHERE requests.tenant_id = ?"
+        params.append(tenant)
+    query += " GROUP BY question ORDER BY n DESC, question LIMIT ?"
+    params.append(limit)
+    with connect() as conn:
+        rows = conn.execute(query, params).fetchall()
     return [dict(row) for row in rows]
 
 
-def summary() -> dict:
+def summary(tenant: str | None = None) -> dict:
     ensure_schema()
+    users_where = "hidden = 0"
+    active_where = "active = 1 AND hidden = 0"
+    request_where = ""
+    lesson_where = "status = 'active'"
+    correction_where = ""
+    params: list = []
+    if tenant:
+        users_where += " AND tenant_id = ?"
+        active_where += " AND tenant_id = ?"
+        request_where = "tenant_id = ?"
+        lesson_where += " AND tenant_id = ?"
+        correction_where = "tenant_id = ?"
+        params = [tenant]
     with connect() as conn:
-        row = conn.execute(
-            """
-            SELECT
-                (SELECT COUNT(*) FROM users WHERE hidden = 0) AS users,
-                (SELECT COUNT(*) FROM users WHERE active = 1 AND hidden = 0) AS active_users,
-                (SELECT COUNT(*) FROM requests) AS requests,
-                (SELECT COUNT(*) FROM ratings WHERE vote = 'up') AS likes,
-                (SELECT COUNT(*) FROM ratings WHERE vote = 'down') AS dislikes,
-                (SELECT COUNT(*) FROM lessons WHERE status = 'active') AS lessons,
-                (SELECT COUNT(*) FROM corrections) AS corrections,
-                (SELECT COUNT(*) FROM corrections WHERE status = 'active') AS active_corrections
-            """
-        ).fetchone()
-    data = dict(row)
-    data.update(check_summary())
-    return data
+        def count(sql: str, extra: list | None = None) -> int:
+            row = conn.execute(sql, (extra or []) + params).fetchone()
+            return int(row["n"] or 0)
 
+        users = count(f"SELECT COUNT(*) AS n FROM users WHERE {users_where}")
+        active_users = count(f"SELECT COUNT(*) AS n FROM users WHERE {active_where}")
+        requests = count(
+            "SELECT COUNT(*) AS n FROM requests"
+            + (f" WHERE {request_where}" if request_where else "")
+        )
+        likes = count(
+            "SELECT COUNT(*) AS n FROM ratings JOIN requests r ON r.id = ratings.request_id "
+            "WHERE ratings.vote = 'up'"
+            + (f" AND r.{request_where}" if request_where else "")
+        )
+        dislikes = count(
+            "SELECT COUNT(*) AS n FROM ratings JOIN requests r ON r.id = ratings.request_id "
+            "WHERE ratings.vote = 'down'"
+            + (f" AND r.{request_where}" if request_where else "")
+        )
+        lessons = count(f"SELECT COUNT(*) AS n FROM lessons WHERE {lesson_where}")
+        corrections = count(
+            "SELECT COUNT(*) AS n FROM corrections"
+            + (f" WHERE {correction_where}" if correction_where else "")
+        )
+        active_corrections = count(
+            "SELECT COUNT(*) AS n FROM corrections WHERE status = 'active'"
+            + (f" AND {correction_where}" if correction_where else "")
+        )
+    data = {
+        "users": users,
+        "active_users": active_users,
+        "requests": requests,
+        "likes": likes,
+        "dislikes": dislikes,
+        "lessons": lessons,
+        "corrections": corrections,
+        "active_corrections": active_corrections,
+    }
+    data.update(check_summary(tenant))
+    return data
 
 def get_request(request_id: int) -> dict | None:
     ensure_schema()

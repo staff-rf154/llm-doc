@@ -136,7 +136,7 @@ def main() -> int:
     try:
         response = client.get("/api/admin/domain")
         domains_status = response.status_code
-        expected = 200 if ROLE == "system" else 403
+        expected = 200 if ROLE in ("system", "admin") else 403
         profiles = response.json().get("profiles", []) if response.status_code == 200 else []
         step(
             "domains",

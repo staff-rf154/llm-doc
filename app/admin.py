@@ -28,19 +28,29 @@ import vectorstore as vs
 import verify
 import webcrawl
 
-router = APIRouter(prefix="/api/admin", tags=["admin"])
+router = APIRouter(
+    prefix="/api/admin",
+    tags=["admin"],
+    dependencies=[Depends(auth.tenant_guard)],
+)
+
+
+def _scope(user: dict) -> str | None:
+    return auth.tenant_scope(user)
 
 
 class UserCreate(BaseModel):
     username: str = Field(min_length=2, max_length=64)
     password: str = Field(min_length=4, max_length=256)
-    role: str = Field(default="user", pattern="^(user|admin)$")
+    role: str = Field(default="user", pattern="^(user|tenant_admin|admin)$")
+    tenant_id: str | None = None
 
 
 class UserUpdate(BaseModel):
     password: str | None = Field(default=None, min_length=4, max_length=256)
-    role: str | None = Field(default=None, pattern="^(user|admin)$")
+    role: str | None = Field(default=None, pattern="^(user|tenant_admin|admin)$")
     active: bool | None = None
+    tenant_id: str | None = None
 
 
 class PasswordReset(BaseModel):
@@ -629,21 +639,47 @@ def eval_history(limit: int = 30, user: dict = Depends(auth.require_admin)) -> d
     return {"items": items}
 
 
+class TenantCreate(BaseModel):
+    slug: str = Field(min_length=2, max_length=32, pattern=r"^[a-z0-9][a-z0-9_-]{1,31}$")
+    title: str = Field(default="", max_length=200)
+
+
+@router.get("/tenants")
+def tenants(user: dict = Depends(auth.require_global_admin)) -> dict:
+    return {"items": appdb.list_tenants()}
+
+
+@router.post("/tenants", status_code=201)
+def create_tenant(payload: TenantCreate, user: dict = Depends(auth.require_global_admin)) -> dict:
+    if appdb.tenant_exists(payload.slug):
+        raise HTTPException(status_code=409, detail="Тенант уже существует")
+    item = appdb.create_tenant(payload.slug, payload.title)
+    domains.ensure_tenant_seed(payload.slug)
+    return item
+
+
 @router.get("/summary")
 def summary(user: dict = Depends(auth.require_admin)) -> dict:
-    return appdb.summary()
+    return appdb.summary(_scope(user))
 
 
 @router.get("/users")
 def users(user: dict = Depends(auth.require_admin)) -> dict:
-    return {"users": appdb.list_users()}
+    return {"users": appdb.list_users(_scope(user))}
 
 
 @router.post("/users", status_code=201)
 def create_user(payload: UserCreate, user: dict = Depends(auth.require_admin)) -> dict:
     if appdb.get_user_by_name(payload.username):
         raise HTTPException(status_code=409, detail="Пользователь уже существует")
-    return appdb.create_user(payload.username, payload.password, payload.role)
+    scope = _scope(user)
+    role = payload.role
+    if scope is not None:
+        role = "user"
+    elif role == "admin" and user["role"] != "system":
+        raise HTTPException(status_code=403, detail="Администратора создаёт только system")
+    tenant_id = scope or payload.tenant_id or appdb.DEFAULT_TENANT
+    return appdb.create_user(payload.username, payload.password, role, tenant_id=tenant_id)
 
 
 @router.patch("/users/{user_id}")
@@ -652,14 +688,22 @@ def update_user(
     payload: UserUpdate,
     user: dict = Depends(auth.require_admin),
 ) -> dict:
-    if not appdb.get_user(user_id):
+    target = appdb.get_user(user_id)
+    scope = _scope(user)
+    if not target or (scope is not None and target.get("tenant_id") != scope):
         raise HTTPException(status_code=404, detail="Пользователь не найден")
     if payload.password:
         appdb.set_password(user_id, payload.password)
     if payload.role:
-        if user_id == user["id"] and payload.role != "admin":
+        if scope is not None and payload.role != "user":
+            raise HTTPException(status_code=403, detail="Роль назначает администратор")
+        if user_id == user["id"] and payload.role not in ("admin", "tenant_admin"):
             raise HTTPException(status_code=400, detail="Нельзя снять роль у себя")
+        if payload.role == "admin" and user["role"] != "system":
+            raise HTTPException(status_code=403, detail="Администратора назначает только system")
         appdb.set_role(user_id, payload.role)
+    if payload.tenant_id and scope is None:
+        appdb.set_tenant(user_id, payload.tenant_id)
     if payload.active is not None:
         if user_id == user["id"] and not payload.active:
             raise HTTPException(status_code=400, detail="Нельзя отключить себя")
@@ -672,7 +716,9 @@ def reset_password(
     payload: PasswordReset,
     user: dict = Depends(auth.require_admin),
 ) -> dict:
-    if not appdb.get_user(payload.user_id):
+    target = appdb.get_user(payload.user_id)
+    scope = _scope(user)
+    if not target or (scope is not None and target.get("tenant_id") != scope):
         raise HTTPException(status_code=404, detail="Пользователь не найден")
     appdb.set_password(payload.user_id, payload.password)
     return {"ok": True}
@@ -682,7 +728,9 @@ def reset_password(
 def delete_user(user_id: int, user: dict = Depends(auth.require_admin)) -> dict:
     if user_id == user["id"]:
         raise HTTPException(status_code=400, detail="Нельзя удалить себя")
-    if not appdb.get_user(user_id):
+    target = appdb.get_user(user_id)
+    scope = _scope(user)
+    if not target or (scope is not None and target.get("tenant_id") != scope):
         raise HTTPException(status_code=404, detail="Пользователь не найден")
     appdb.delete_user(user_id)
     return {"ok": True}
@@ -700,6 +748,7 @@ def requests(
     order: str = "desc",
     user: dict = Depends(auth.require_admin),
 ) -> dict:
+    tenant = _scope(user)
     items = appdb.list_requests(
         limit=limit,
         offset=offset,
@@ -709,33 +758,35 @@ def requests(
         origin=origin,
         sort=sort,
         order=order,
+        tenant=tenant,
     )
-    by_question = appdb.correction_ids_by_question()
+    by_question = appdb.correction_ids_by_question(tenant)
     for item in items:
         item["correction_id"] = by_question.get(item["question"].strip().lower())
         item["is_system"] = item.get("origin") not in ("", "web")
     return {
         "items": items,
         "total": appdb.count_requests(
-            vote=vote, username=username, search=search, origin=origin
+            vote=vote, username=username, search=search, origin=origin, tenant=tenant
         ),
     }
 
 
 @router.get("/stats")
 def stats(days: int = 30, user: dict = Depends(auth.require_admin)) -> dict:
+    tenant = _scope(user)
     return {
-        "summary": appdb.summary(),
-        "by_user": appdb.stats_by_user(),
-        "by_day": appdb.stats_by_day(days),
-        "top_questions": appdb.top_questions(),
+        "summary": appdb.summary(tenant),
+        "by_user": appdb.stats_by_user(tenant),
+        "by_day": appdb.stats_by_day(days, tenant),
+        "top_questions": appdb.top_questions(tenant=tenant),
     }
 
 
 @router.get("/documents")
 def documents(user: dict = Depends(auth.require_admin)) -> dict:
     """Документы, доступные для ссылки на страницу."""
-    return {"items": docpages.list_documents()}
+    return {"items": docpages.list_documents(auth.tenant_scope(user))}
 
 
 class EvalStart(BaseModel):
@@ -768,7 +819,8 @@ def docs_list(
     user: dict = Depends(auth.require_admin),
 ) -> dict:
     """Файлы документации (с подпапками) и их состояние в индексе."""
-    items = docs_mod.list_documents()
+    tenant = auth.tenant_scope(user)
+    items = docs_mod.list_documents(tenant)
     offset = max(0, offset)
     limit = max(1, min(limit, 500))
     needle = (q or "").strip().lower()
@@ -778,7 +830,7 @@ def docs_list(
     indexed_all = len([item for item in items if item["indexed"]])
     return {
         "items": items[offset:offset + limit],
-        "folders": docs_mod.list_folders(),
+        "folders": docs_mod.list_folders(tenant),
         "total": total,
         "offset": offset,
         "limit": limit,
@@ -798,7 +850,7 @@ class DocFolder(BaseModel):
 def docs_folder_create(payload: DocFolder, user: dict = Depends(auth.require_admin)) -> dict:
     """Создать папку в каталоге документации."""
     try:
-        return docs_mod.create_folder(payload.name)
+        return docs_mod.create_folder(payload.name, auth.tenant_scope(user))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -807,7 +859,7 @@ def docs_folder_create(payload: DocFolder, user: dict = Depends(auth.require_adm
 def docs_folder_delete(name: str, user: dict = Depends(auth.require_admin)) -> dict:
     """Удалить папку вместе с содержимым и точками из индекса."""
     try:
-        return docs_mod.delete_folder(name)
+        return docs_mod.delete_folder(name, auth.tenant_scope(user))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -822,8 +874,9 @@ async def docs_upload(
 ) -> dict:
     """Загрузить документ с компьютера администратора."""
     try:
-        saved = docs_mod.save_bytes(file.filename or "", await file.read(), folder)
-        indexed = docs_mod.index_document(saved["name"])
+        tenant = auth.tenant_scope(user)
+        saved = docs_mod.save_bytes(file.filename or "", await file.read(), folder, tenant)
+        indexed = docs_mod.index_document(saved["name"], tenant)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except Exception as exc:
@@ -843,7 +896,8 @@ def docs_urls(payload: DocUrls, user: dict = Depends(auth.require_admin)) -> dic
     Все файлы попадают в каталог загрузок `data/docs/upload` или в указанную папку.
     """
     try:
-        result = docs_mod.fetch_urls(payload.urls, payload.folder)
+        tenant = auth.tenant_scope(user)
+        result = docs_mod.fetch_urls(payload.urls, payload.folder, tenant)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     indexed = 0
@@ -851,7 +905,7 @@ def docs_urls(payload: DocUrls, user: dict = Depends(auth.require_admin)) -> dic
         if not item.get("ok"):
             continue
         try:
-            docs_mod.index_document(item["name"])
+            docs_mod.index_document(item["name"], tenant)
             item["indexed"] = True
             indexed += 1
         except Exception as exc:
@@ -864,7 +918,7 @@ def docs_urls(payload: DocUrls, user: dict = Depends(auth.require_admin)) -> dic
 def docs_index(name: str, user: dict = Depends(auth.require_admin)) -> dict:
     """Переиндексировать один документ."""
     try:
-        return docs_mod.index_document(name)
+        return docs_mod.index_document(name, auth.tenant_scope(user))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -875,7 +929,7 @@ def docs_index(name: str, user: dict = Depends(auth.require_admin)) -> dict:
 def docs_delete(name: str, user: dict = Depends(auth.require_admin)) -> dict:
     """Удалить документ: с диска и из индекса."""
     try:
-        result = docs_mod.delete_document(name)
+        result = docs_mod.delete_document(name, auth.tenant_scope(user))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not result["removed_file"] and not result["purged_points"]:
@@ -891,7 +945,7 @@ class DocRestore(BaseModel):
 def docs_restore(payload: DocRestore, user: dict = Depends(auth.require_admin)) -> dict:
     """Вернуть документ в индекс."""
     try:
-        return docs_mod.restore_document(payload.name)
+        return docs_mod.restore_document(payload.name, auth.tenant_scope(user))
     except FileNotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except ValueError as exc:
@@ -904,9 +958,10 @@ def document_pages(
     user: dict = Depends(auth.require_admin),
 ) -> dict:
     """Текст указанных страниц документа — основа для исправленного ответа."""
-    if not docpages.find_document(payload.doc_name):
+    tenant = auth.tenant_scope(user)
+    if not docpages.find_document(payload.doc_name, tenant):
         raise HTTPException(status_code=404, detail="Документ не найден в data/docs")
-    text = docpages.extract_pages(payload.doc_name, payload.doc_pages)
+    text = docpages.extract_pages(payload.doc_name, payload.doc_pages, tenant)
     return {
         "doc_name": payload.doc_name,
         "doc_pages": docpages.format_pages(docpages.parse_pages(payload.doc_pages)),
@@ -917,7 +972,7 @@ def document_pages(
 
 @router.get("/corrections")
 def list_corrections(user: dict = Depends(auth.require_admin)) -> dict:
-    return {"items": appdb.list_corrections()}
+    return {"items": appdb.list_corrections(tenant=_scope(user))}
 
 
 @router.post("/corrections", status_code=201)
@@ -925,6 +980,9 @@ def create_correction(
     payload: CorrectionCreate,
     user: dict = Depends(auth.require_admin),
 ) -> dict:
+    tenant = _scope(user)
+    if not docpages.find_document(payload.doc_name, tenant):
+        raise HTTPException(status_code=404, detail="Документ не найден в data/docs")
     pages = docpages.format_pages(docpages.parse_pages(payload.doc_pages))
     item = appdb.create_correction(
         payload.question,
@@ -933,6 +991,7 @@ def create_correction(
         payload.doc_name.strip(),
         pages,
         docpages.build_reference(payload.doc_name, pages),
+        tenant_id=tenant or appdb.DEFAULT_TENANT,
     )
     corrections.reindex()
     if config.TRAINING_FROM_CORRECTIONS:
@@ -946,11 +1005,14 @@ def update_correction(
     payload: CorrectionUpdate,
     user: dict = Depends(auth.require_admin),
 ) -> dict:
-    current = appdb.get_correction(correction_id)
+    tenant = _scope(user)
+    current = appdb.get_correction(correction_id, tenant)
     if not current:
         raise HTTPException(status_code=404, detail="Исправление не найдено")
 
     doc_name = payload.doc_name if payload.doc_name is not None else current["doc_name"]
+    if not docpages.find_document(doc_name, tenant):
+        raise HTTPException(status_code=404, detail="Документ не найден в data/docs")
     doc_pages = (
         docpages.format_pages(docpages.parse_pages(payload.doc_pages))
         if payload.doc_pages is not None
@@ -970,9 +1032,10 @@ def update_correction(
         doc_name=doc_name,
         doc_pages=doc_pages,
         doc_ref=docpages.build_reference(doc_name, doc_pages),
+        tenant=tenant,
     )
     corrections.reindex()
-    updated = appdb.get_correction(correction_id) or {}
+    updated = appdb.get_correction(correction_id, tenant) or {}
     if config.TRAINING_FROM_CORRECTIONS and updated:
         lessons.learn_job.queue(updated, user["username"])
     return updated
@@ -983,10 +1046,11 @@ def delete_correction(
     correction_id: int,
     user: dict = Depends(auth.require_admin),
 ) -> dict:
-    if not appdb.get_correction(correction_id):
+    tenant = _scope(user)
+    if not appdb.get_correction(correction_id, tenant):
         raise HTTPException(status_code=404, detail="Исправление не найдено")
     lesson_ids = appdb.training_lessons_for_correction(correction_id)
-    appdb.delete_correction(correction_id)
+    appdb.delete_correction(correction_id, tenant)
     corrections.deactivate(correction_id)
     for lesson_id in lesson_ids:
         appdb.delete_lesson(lesson_id)
@@ -1002,7 +1066,7 @@ def correction_from_request(
     payload: CorrectionUpdate,
     user: dict = Depends(auth.require_admin),
 ) -> dict:
-    items = appdb.list_requests(limit=10_000)
+    items = appdb.list_requests(limit=10_000, tenant=_scope(user))
     for item in items:
         if item["id"] == request_id:
             break
@@ -1075,7 +1139,7 @@ def upsert_correction_by_question(
 ) -> dict:
     """Обновить исправление с таким же вопросом или создать новое."""
     existing = None
-    for item in appdb.list_corrections():
+    for item in appdb.list_corrections(tenant=_scope(user)):
         if item["question"].strip().lower() == payload.question.strip().lower():
             existing = item
             break
@@ -1096,19 +1160,20 @@ def upsert_correction_by_question(
 @router.get("/verify")
 def verify_status(user: dict = Depends(auth.require_admin)) -> dict:
     status = verify.job.snapshot()
-    status["summary"] = appdb.check_summary()
+    status["summary"] = appdb.check_summary(_scope(user))
     return status
 
 
 @router.post("/verify", status_code=202)
-def verify_start(user: dict = Depends(auth.require_admin)) -> dict:
-    return verify.job.start()
+def verify_start(user: dict = Depends(auth.require_tenant_admin)) -> dict:
+    return verify.job.start(_scope(user))
 
 
 @router.post("/verify/reset")
-def verify_reset(user: dict = Depends(auth.require_admin)) -> dict:
-    appdb.reset_checks()
-    return {"ok": True, "summary": appdb.check_summary()}
+def verify_reset(user: dict = Depends(auth.require_tenant_admin)) -> dict:
+    tenant = _scope(user)
+    appdb.reset_checks(tenant)
+    return {"ok": True, "summary": appdb.check_summary(tenant)}
 
 
 class CapabilitiesUpdate(BaseModel):
@@ -1188,52 +1253,55 @@ class DomainUpdate(BaseModel):
     settings: dict[str, str] | None = None
 
 
-def _domain_catalog() -> dict:
-    current = domains.current()
+def _domain_catalog(tenant: str = appdb.DEFAULT_TENANT) -> dict:
+    current = domains.current(tenant)
     return {
         "current": current.get("slug", ""),
         "profile": current,
-        "profiles": domains.list_profiles(),
+        "profiles": domains.list_profiles(tenant),
         "default": domains.DEFAULT_SLUG,
         "env": config.DOMAIN_PROFILE,
     }
 
 
 @router.get("/domain")
-def get_domain(user: dict = Depends(auth.require_system)) -> dict:
+def get_domain(user: dict = Depends(auth.require_tenant_admin)) -> dict:
     """Сфера деятельности: активное направление и каталог."""
-    return _domain_catalog()
+    return _domain_catalog(_scope(user) or appdb.DEFAULT_TENANT)
 
 
 @router.patch("/domain")
 def select_domain(
     payload: DomainSelect,
-    user: dict = Depends(auth.require_system),
+    user: dict = Depends(auth.require_tenant_admin),
 ) -> dict:
     """Выбрать сферу деятельности: подставляются её инструкция и настройки."""
+    tenant = _scope(user) or appdb.DEFAULT_TENANT
     try:
-        domains.set_profile(payload.profile)
+        domains.set_profile(payload.profile, tenant)
         capabilities_mod.reset_groups()
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     bootstrap.maybe_start("domain")
-    return _domain_catalog()
+    return _domain_catalog(tenant)
 
 
 @router.post("/domain/reset")
-def reset_domain(user: dict = Depends(auth.require_system)) -> dict:
-    domains.reset()
+def reset_domain(user: dict = Depends(auth.require_tenant_admin)) -> dict:
+    tenant = _scope(user) or appdb.DEFAULT_TENANT
+    domains.reset(tenant)
     capabilities_mod.reset_groups()
-    return _domain_catalog()
+    return _domain_catalog(tenant)
 
 
 @router.post("/domains", status_code=201)
 def create_domain(
     payload: DomainCreate,
-    user: dict = Depends(auth.require_system),
+    user: dict = Depends(auth.require_tenant_admin),
 ) -> dict:
+    tenant = _scope(user) or appdb.DEFAULT_TENANT
     try:
-        return domains.create(payload.model_dump(exclude_none=True))
+        return domains.create(payload.model_dump(exclude_none=True), tenant)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1242,10 +1310,11 @@ def create_domain(
 def update_domain(
     slug: str,
     payload: DomainUpdate,
-    user: dict = Depends(auth.require_system),
+    user: dict = Depends(auth.require_tenant_admin),
 ) -> dict:
+    tenant = _scope(user) or appdb.DEFAULT_TENANT
     try:
-        return domains.update(slug, payload.model_dump(exclude_unset=True))
+        return domains.update(slug, payload.model_dump(exclude_unset=True), tenant)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -1253,10 +1322,11 @@ def update_domain(
 @router.delete("/domains/{slug}")
 def delete_domain(
     slug: str,
-    user: dict = Depends(auth.require_system),
+    user: dict = Depends(auth.require_tenant_admin),
 ) -> dict:
+    tenant = _scope(user) or appdb.DEFAULT_TENANT
     try:
-        removed = domains.delete(slug)
+        removed = domains.delete(slug, tenant)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if not removed:
@@ -1267,10 +1337,11 @@ def delete_domain(
 @router.post("/domains/{slug}/duplicate", status_code=201)
 def duplicate_domain(
     slug: str,
-    user: dict = Depends(auth.require_system),
+    user: dict = Depends(auth.require_tenant_admin),
 ) -> dict:
+    tenant = _scope(user) or appdb.DEFAULT_TENANT
     try:
-        return domains.duplicate(slug)
+        return domains.duplicate(slug, tenant)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

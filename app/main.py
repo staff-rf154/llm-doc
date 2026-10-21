@@ -323,7 +323,7 @@ def reindex_resume() -> dict:
 
 @app.post("/retrieve")
 def retrieve(req: RetrieveRequest) -> dict:
-    chunks = rag.retrieve(req.query, req.top_k)
+    chunks = rag.retrieve(req.query, req.top_k, tenant=appdb.DEFAULT_TENANT)
     return {
         "query": req.query,
         "results": [
@@ -349,7 +349,11 @@ def ask(
 ) -> dict:
     started = time.time()
     try:
-        answer = rag.ask(req.question, req.top_k)
+        answer = rag.ask(
+            req.question,
+            req.top_k,
+            tenant=auth.tenant_scope(user) or appdb.DEFAULT_TENANT,
+        )
     except Exception as exc:
         raise HTTPException(status_code=502, detail=f"LLM error: {exc}") from exc
     request_id = appdb.log_request(

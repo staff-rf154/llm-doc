@@ -1251,6 +1251,7 @@ _TRANSLIT = {
 }
 
 _seed_done = False
+_seeding_tenants: set[str] = set()
 
 
 def _base_prompt() -> str:
@@ -1262,16 +1263,60 @@ def ensure_seed() -> None:
     global _seed_done
     if _seed_done:
         return
-    appdb.ensure_schema()
-    if appdb.count_domains() == 0:
-        base = _base_prompt()
-        for item in SEED:
-            _insert_item(item, base)
-    _migrate_seed()
     _seed_done = True
+    try:
+        appdb.ensure_schema()
+        if appdb.count_domains("default") == 0:
+            base = _base_prompt()
+            for item in SEED:
+                _insert_item(item, base)
+        _migrate_seed()
+    except Exception:
+        _seed_done = False
+        raise
 
 
-def _insert_item(item: dict, base: str) -> dict:
+def ensure_tenant_seed(tenant: str) -> None:
+    """У нового тенанта должен быть хотя бы один профиль."""
+    tenant = tenant or "default"
+    if tenant == "default":
+        ensure_seed()
+        return
+    if tenant in _seeding_tenants:
+        return
+    _seeding_tenants.add(tenant)
+    try:
+        ensure_seed()
+        appdb.ensure_schema()
+        if appdb.count_domains(tenant):
+            return
+        source = appdb.get_domain_by_slug(DEFAULT_SLUG, "default")
+        if source:
+            appdb.insert_domain(
+                slug=source["slug"],
+                title=source["title"],
+                description=source.get("description", ""),
+                system_prompt=source.get("system_prompt", ""),
+                capabilities=source.get("capabilities", []),
+                categories=source.get("categories", []),
+                terminology=source.get("terminology", []),
+                sample_questions=source.get("sample_questions", []),
+                temperature=source.get("temperature"),
+                allow_inference=bool(source.get("allow_inference")),
+                settings=dict(source.get("settings") or {}),
+                synonyms=dict(source.get("synonyms") or {}),
+                is_builtin=True,
+                tenant_id=tenant,
+            )
+            return
+        base = _base_prompt()
+        for item in SEED[:1]:
+            _insert_item(item, base, tenant)
+    finally:
+        _seeding_tenants.discard(tenant)
+
+
+def _insert_item(item: dict, base: str, tenant: str = "default") -> dict:
     addon = item.get("addon", "")
     prompt = f"{base}\n\n{addon}" if addon else base
     return appdb.insert_domain(
@@ -1288,6 +1333,7 @@ def _insert_item(item: dict, base: str) -> dict:
         settings=item.get("settings") or {},
         synonyms=item.get("synonyms") or {},
         is_builtin=True,
+        tenant_id=tenant,
     )
 
 
@@ -1305,7 +1351,7 @@ def _migrate_seed() -> None:
         return
     base = _base_prompt()
     for item in SEED:
-        existing = appdb.get_domain_by_slug(item["slug"])
+        existing = appdb.get_domain_by_slug(item["slug"], "default")
         if not existing:
             _insert_item(item, base)
             continue
@@ -1337,7 +1383,7 @@ def _migrate_seed() -> None:
         if item.get("synonyms") is not None and existing.get("synonyms") != item.get("synonyms"):
             fields["synonyms"] = item.get("synonyms") or {}
         if fields:
-            appdb.update_domain(item["slug"], **fields)
+            appdb.update_domain(item["slug"], "default", **fields)
     appdb.set_setting(SEED_VERSION_KEY, str(SEED_VERSION))
     settings.invalidate()
 
@@ -1349,33 +1395,42 @@ def slugify(title: str) -> str:
     return text or "domain"
 
 
-def _unique_slug(base: str, exclude: str | None = None) -> str:
+def _unique_slug(
+    base: str, exclude: str | None = None, tenant: str = "default"
+) -> str:
     candidate = base
     index = 2
     while True:
-        existing = appdb.get_domain_by_slug(candidate)
+        existing = appdb.get_domain_by_slug(candidate, tenant)
         if not existing or candidate == exclude:
             return candidate
         candidate = f"{base}-{index}"
         index += 1
 
 
-def list_profiles() -> list[dict]:
+def setting_key(tenant: str = "default") -> str:
+    return SETTING_KEY if tenant in ("", "default") else f"{SETTING_KEY}:{tenant}"
+
+
+def list_profiles(tenant: str | None = None) -> list[dict]:
     """Полный каталог направлений для кабинета (по алфавиту)."""
-    ensure_seed()
+    if tenant:
+        ensure_tenant_seed(tenant)
+    else:
+        ensure_seed()
     return sorted(
-        appdb.list_domains(),
+        appdb.list_domains(tenant),
         key=lambda item: (item.get("title") or "").casefold().replace("ё", "е"),
     )
 
 
-def current_id() -> str:
-    ensure_seed()
-    domains = appdb.list_domains()
+def current_id(tenant: str = "default") -> str:
+    ensure_tenant_seed(tenant)
+    domains = appdb.list_domains(tenant)
     if not domains:
         return ""
     known = {item["slug"] for item in domains}
-    stored = (appdb.get_setting(SETTING_KEY, "") or "").strip()
+    stored = (appdb.get_setting(setting_key(tenant), "") or "").strip()
     if stored in known:
         return stored
     env = (config.DOMAIN_PROFILE or "").strip()
@@ -1386,30 +1441,30 @@ def current_id() -> str:
     return domains[0]["slug"]
 
 
-def current() -> dict:
-    ensure_seed()
-    item = appdb.get_domain_by_slug(current_id())
+def current(tenant: str = "default") -> dict:
+    ensure_tenant_seed(tenant)
+    item = appdb.get_domain_by_slug(current_id(tenant), tenant)
     if item:
         return item
-    domains = appdb.list_domains()
+    domains = appdb.list_domains(tenant)
     return domains[0] if domains else {}
 
 
-def set_profile(slug: str) -> dict:
-    ensure_seed()
-    if not appdb.get_domain_by_slug(slug):
+def set_profile(slug: str, tenant: str = "default") -> dict:
+    ensure_tenant_seed(tenant)
+    if not appdb.get_domain_by_slug(slug, tenant):
         raise ValueError(f"Неизвестное направление: {slug}")
-    appdb.set_setting(SETTING_KEY, slug)
+    appdb.set_setting(setting_key(tenant), slug)
     settings.invalidate()
     _invalidate_synonyms()
-    return current()
+    return current(tenant)
 
 
-def reset() -> dict:
-    appdb.set_setting(SETTING_KEY, "")
+def reset(tenant: str = "default") -> dict:
+    appdb.set_setting(setting_key(tenant), "")
     settings.invalidate()
     _invalidate_synonyms()
-    return current()
+    return current(tenant)
 
 
 def _invalidate_synonyms() -> None:
@@ -1421,18 +1476,18 @@ def _invalidate_synonyms() -> None:
         pass
 
 
-def system_prompt() -> str:
+def system_prompt(tenant: str = "default") -> str:
     """Системная инструкция активного направления (иначе — общая из настроек)."""
-    item = current()
+    item = current(tenant)
     prompt = (item.get("system_prompt") or "").strip()
     if prompt and item.get("allow_inference"):
         prompt = f"{prompt}\n\n{INFERENCE_BLOCK}"
     return prompt or _base_prompt()
 
 
-def temperature() -> float | None:
+def temperature(tenant: str = "default") -> float | None:
     """Температура генерации направления; None — использовать общую."""
-    value = current().get("temperature")
+    value = current(tenant).get("temperature")
     if value is None:
         return None
     try:
@@ -1442,35 +1497,35 @@ def temperature() -> float | None:
     return number if number >= 0 else None
 
 
-def allow_inference() -> bool:
+def allow_inference(tenant: str = "default") -> bool:
     """Разрешён ли в активном направлении небольшой домысел."""
-    return bool(current().get("allow_inference"))
+    return bool(current(tenant).get("allow_inference"))
 
 
-def capabilities() -> list[dict]:
-    groups = current().get("capabilities") or []
+def capabilities(tenant: str = "default") -> list[dict]:
+    groups = current(tenant).get("capabilities") or []
     return [{"title": g.get("title", ""), "items": list(g.get("items", []))} for g in groups]
 
 
-def question_categories() -> list[str]:
-    return list(current().get("categories") or [])
+def question_categories(tenant: str = "default") -> list[str]:
+    return list(current(tenant).get("categories") or [])
 
 
-def sample_questions() -> list[str]:
-    return list(current().get("sample_questions") or [])
+def sample_questions(tenant: str = "default") -> list[str]:
+    return list(current(tenant).get("sample_questions") or [])
 
 
-def terminology() -> list[str]:
-    return list(current().get("terminology") or [])
+def terminology(tenant: str = "default") -> list[str]:
+    return list(current(tenant).get("terminology") or [])
 
 
-def create(data: dict) -> dict:
+def create(data: dict, tenant: str = "default") -> dict:
     """Создать направление. Обязательно поле title."""
-    ensure_seed()
+    ensure_tenant_seed(tenant)
     title = (data.get("title") or "").strip()
     if not title:
         raise ValueError("Нужно название направления")
-    slug = _unique_slug(slugify(data.get("slug") or title))
+    slug = _unique_slug(slugify(data.get("slug") or title), tenant=tenant)
     return appdb.insert_domain(
         slug=slug,
         title=title,
@@ -1485,12 +1540,13 @@ def create(data: dict) -> dict:
         settings=_clean_settings(data.get("settings")),
         synonyms=_clean_synonyms(data.get("synonyms")),
         is_builtin=False,
+        tenant_id=tenant,
     )
 
 
-def update(slug: str, data: dict) -> dict:
-    ensure_seed()
-    existing = appdb.get_domain_by_slug(slug)
+def update(slug: str, data: dict, tenant: str = "default") -> dict:
+    ensure_tenant_seed(tenant)
+    existing = appdb.get_domain_by_slug(slug, tenant)
     if not existing:
         raise ValueError(f"Неизвестное направление: {slug}")
     fields: dict = {}
@@ -1520,39 +1576,39 @@ def update(slug: str, data: dict) -> dict:
     if "synonyms" in data:
         fields["synonyms"] = _clean_synonyms(data.get("synonyms"))
     if data.get("slug"):
-        new_slug = _unique_slug(slugify(data["slug"]), exclude=slug)
+        new_slug = _unique_slug(slugify(data["slug"]), exclude=slug, tenant=tenant)
         if new_slug and new_slug != slug:
             fields["slug"] = new_slug
-    updated = appdb.update_domain(slug, **fields)
+    updated = appdb.update_domain(slug, tenant, **fields)
     if "settings" in fields:
         settings.invalidate()
     if "synonyms" in fields:
         _invalidate_synonyms()
-    if fields.get("slug") and appdb.get_setting(SETTING_KEY, "") == slug:
-        appdb.set_setting(SETTING_KEY, fields["slug"])
+    if fields.get("slug") and appdb.get_setting(setting_key(tenant), "") == slug:
+        appdb.set_setting(setting_key(tenant), fields["slug"])
         settings.invalidate()
         _invalidate_synonyms()
     return updated or {}
 
 
-def delete(slug: str) -> bool:
-    ensure_seed()
-    if len(appdb.list_domains()) <= 1:
+def delete(slug: str, tenant: str = "default") -> bool:
+    ensure_tenant_seed(tenant)
+    if len(appdb.list_domains(tenant)) <= 1:
         raise ValueError("Нельзя удалить последнее направление")
-    removed = appdb.delete_domain(slug)
-    if removed and appdb.get_setting(SETTING_KEY, "") == slug:
-        appdb.set_setting(SETTING_KEY, "")
+    removed = appdb.delete_domain(slug, tenant)
+    if removed and appdb.get_setting(setting_key(tenant), "") == slug:
+        appdb.set_setting(setting_key(tenant), "")
         settings.invalidate()
     return removed
 
 
-def duplicate(slug: str) -> dict:
-    ensure_seed()
-    source = appdb.get_domain_by_slug(slug)
+def duplicate(slug: str, tenant: str = "default") -> dict:
+    ensure_tenant_seed(tenant)
+    source = appdb.get_domain_by_slug(slug, tenant)
     if not source:
         raise ValueError(f"Неизвестное направление: {slug}")
     title = source["title"] + " (копия)"
-    new_slug = _unique_slug(slugify(source["slug"] + " copy"))
+    new_slug = _unique_slug(slugify(source["slug"] + " copy"), tenant=tenant)
     return appdb.insert_domain(
         slug=new_slug,
         title=title,
@@ -1567,19 +1623,20 @@ def duplicate(slug: str) -> dict:
         settings=dict(source.get("settings") or {}),
         synonyms=dict(source.get("synonyms") or {}),
         is_builtin=False,
+        tenant_id=tenant,
     )
 
 
-def active_settings() -> dict:
+def active_settings(tenant: str = "default") -> dict:
     """Настройки активной сферы деятельности: имеют приоритет над локальными."""
-    item = current()
+    item = current(tenant)
     values = item.get("settings") or {}
     return {str(k): str(v) for k, v in values.items() if str(v).strip()}
 
 
-def active_synonyms() -> dict[str, list[str]]:
+def active_synonyms(tenant: str = "default") -> dict[str, list[str]]:
     """Синонимы активной сферы деятельности."""
-    item = current()
+    item = current(tenant)
     values = item.get("synonyms") or {}
     result: dict[str, list[str]] = {}
     for term, synonyms in values.items():

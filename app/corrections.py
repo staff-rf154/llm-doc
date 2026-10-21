@@ -7,6 +7,7 @@ from qdrant_client.http import models
 import appdb
 import config
 import settings
+import tenancy
 import vectorstore as vs
 
 
@@ -67,6 +68,7 @@ def reindex() -> int:
             "doc_pages": row["doc_pages"],
             "doc_ref": row["doc_ref"],
             "author": row["author"],
+            "tenant_id": row.get("tenant_id") or tenancy.DEFAULT,
             "updated_at": row["updated_at"],
         }
         current = stored.get(correction_id)
@@ -96,7 +98,7 @@ def deactivate(correction_id: int) -> None:
         )
 
 
-def search(question: str, limit: int = 3) -> list[dict]:
+def search(question: str, limit: int = 3, tenant: str | None = None) -> list[dict]:
     """Похожие вопросы с исправленными ответами."""
     client = vs.get_qdrant()
     name = _collection()
@@ -107,6 +109,7 @@ def search(question: str, limit: int = 3) -> list[dict]:
             collection_name=name,
             query=vs.embed_query(question),
             limit=limit,
+            query_filter=tenancy.qdrant_filter(tenant),
             with_payload=True,
         ).points
     except Exception:
@@ -156,9 +159,13 @@ def is_same_topic(question: str, stored_question: str, score: float) -> bool:
     return len(shared) >= needed
 
 
-def match(question: str) -> tuple[dict | None, list[dict]]:
+def match(question: str, tenant: str | None = None) -> tuple[dict | None, list[dict]]:
     """Исправление для прямого ответа и примеры для подсказки модели."""
-    found = search(question, limit=max(1, settings.int_value("CORRECTION_EXAMPLES") + 1))
+    found = search(
+        question,
+        limit=max(1, settings.int_value("CORRECTION_EXAMPLES") + 1),
+        tenant=tenant,
+    )
     exact = None
     examples: list[dict] = []
     threshold = settings.float_value("CORRECTION_MATCH_THRESHOLD")

@@ -12,6 +12,7 @@ import threading
 import appdb
 import config
 import rag
+import tenancy
 import vectorstore as vs
 
 _COLLECTION = None
@@ -54,12 +55,12 @@ DRAFT_PROMPT = (
 )
 
 
-def documentation_context(question: str, limit: int = 3) -> str:
+def documentation_context(question: str, limit: int = 3, tenant: str | None = None) -> str:
     """Фрагменты документации по теме диалога — наставник сверяется с ними."""
     if not question.strip():
         return ""
     try:
-        chunks = rag.retrieve(question, limit)
+        chunks = rag.retrieve(question, limit, tenant=tenant)
     except Exception:
         return ""
     if not chunks:
@@ -173,6 +174,7 @@ def _payload(lesson: dict) -> dict:
         "answer": lesson["answer"],
         "focus": lesson["focus"],
         "author": lesson["author"],
+        "tenant_id": lesson.get("tenant_id") or tenancy.DEFAULT,
     }
 
 
@@ -189,14 +191,17 @@ def save_lesson(
     focus: str,
     author: str,
     status: str = "active",
+    tenant: str = tenancy.DEFAULT,
 ) -> dict:
-    lesson = appdb.create_lesson(topic, question, answer, focus, author, status=status)
+    lesson = appdb.create_lesson(
+        topic, question, answer, focus, author, status=status, tenant_id=tenant
+    )
     if status == "active":
         reindex()
     return lesson
 
 
-def relevant(question: str, limit: int | None = None) -> list[dict]:
+def relevant(question: str, limit: int | None = None, tenant: str | None = None) -> list[dict]:
     """Уроки, релевантные вопросу, — в порядке убывания схожести."""
     client = vs.get_qdrant()
     name = collection()
@@ -208,6 +213,7 @@ def relevant(question: str, limit: int | None = None) -> list[dict]:
             collection_name=name,
             query=vs.embed_query(question),
             limit=limit,
+            query_filter=tenancy.qdrant_filter(tenant),
             with_payload=True,
         ).points
     except Exception:
@@ -253,10 +259,10 @@ def as_prompt_block(lessons: list[dict]) -> str:
     )
 
 
-def chat(history: list[dict], question: str) -> str:
+def chat(history: list[dict], question: str, tenant: str | None = None) -> str:
     """Диалог с наставником: история + новая реплика администратора."""
     messages = [{"role": "system", "content": TRAINER_SYSTEM}]
-    context = documentation_context(question)
+    context = documentation_context(question, tenant=tenant)
     if context:
         messages.append({"role": "system", "content": context})
     for turn in history[-8:]:
@@ -275,7 +281,7 @@ def chat(history: list[dict], question: str) -> str:
     return (completion.choices[0].message.content or "").strip()
 
 
-def draft(history: list[dict]) -> dict:
+def draft(history: list[dict], tenant: str | None = None) -> dict:
     """Собрать черновик урока из диалога."""
     transcript = "\n".join(
         f"{'Администратор' if turn.get('role') == 'user' else 'Наставник'}: "
@@ -285,7 +291,7 @@ def draft(history: list[dict]) -> dict:
     )
     topic = _dialog_question(history)
     messages = [{"role": "system", "content": TRAINER_SYSTEM}]
-    context = documentation_context(topic or transcript)
+    context = documentation_context(topic or transcript, tenant=tenant)
     if context:
         messages.append({"role": "system", "content": context})
     messages.append({"role": "user", "content": f"{DRAFT_PROMPT}\n\nДиалог:\n{transcript}"})
@@ -354,11 +360,11 @@ CORRECTION_DIALOG = """Пользователь спросил: «{question}»
 """
 
 
-def _same_lesson(question: str) -> dict | None:
+def _same_lesson(question: str, tenant: str | None = None) -> dict | None:
     target = (question or "").strip().lower()
     if not target:
         return None
-    for item in appdb.list_lessons(status="active"):
+    for item in appdb.list_lessons(status="active", tenant=tenant):
         if item["question"].strip().lower() == target:
             return item
     return None
@@ -366,17 +372,19 @@ def _same_lesson(question: str) -> dict | None:
 
 def learn_from_correction(correction: dict, author: str) -> dict:
     """Собрать или обновить урок на основе исправления администратора."""
-    existing = _same_lesson(correction.get("question", ""))
+    tenant = correction.get("tenant_id") or tenancy.DEFAULT
+    existing = _same_lesson(correction.get("question", ""), tenant)
     if existing:
         appdb.update_lesson(
             existing["id"],
+            tenant,
             topic=(correction.get("question") or existing["topic"])[:80],
             question=correction.get("question") or existing["question"],
             answer=correction.get("answer") or existing["answer"],
             focus=correction.get("doc_ref") or existing["focus"],
         )
         reindex()
-        return appdb.get_lesson(existing["id"]) or {}
+        return appdb.get_lesson(existing["id"], tenant) or {}
 
     dialog = CORRECTION_DIALOG.format(
         question=correction.get("question", ""),
@@ -403,7 +411,12 @@ def learn_from_correction(correction: dict, author: str) -> dict:
     if not draft["focus"]:
         draft["focus"] = correction.get("doc_ref", "")
     return save_lesson(
-        draft["topic"], draft["question"], draft["answer"], draft["focus"], author
+        draft["topic"],
+        draft["question"],
+        draft["answer"],
+        draft["focus"],
+        author,
+        tenant=tenant,
     )
 
 

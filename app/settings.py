@@ -4,6 +4,7 @@
 берётся значение из переменной окружения (то есть из .env).
 """
 
+import contextvars
 import threading
 import time
 from dataclasses import dataclass, field
@@ -220,31 +221,34 @@ CACHE_TTL = 3.0
 
 _lock = threading.Lock()
 _cache: dict = {"at": 0.0, "values": {}}
-_domain_cache: dict = {"at": 0.0, "values": {}}
+_domain_cache: dict[str, dict] = {}
+CURRENT_TENANT = contextvars.ContextVar("tenant_id", default="default")
 
 
 def _domain_values() -> dict[str, str]:
     """Настройки активной сферы деятельности: имеют приоритет над локальными."""
+    tenant = CURRENT_TENANT.get() or "default"
     now = time.time()
     with _lock:
-        if _domain_cache["values"] and now - _domain_cache["at"] < CACHE_TTL:
-            return _domain_cache["values"]
+        cached = _domain_cache.get(tenant)
+        if cached and cached["values"] and now - cached["at"] < CACHE_TTL:
+            return cached["values"]
     values: dict[str, str] = {}
     try:
         import domains
 
-        values = domains.active_settings()
+        values = domains.active_settings(tenant)
     except Exception:
         values = {}
     with _lock:
-        _domain_cache.update(at=now, values=values)
+        _domain_cache[tenant] = {"at": now, "values": values}
     return values
 
 
 def invalidate() -> None:
     with _lock:
         _cache.update(at=0.0, values={})
-        _domain_cache.update(at=0.0, values={})
+        _domain_cache.clear()
 
 
 def _stored() -> dict[str, str]:

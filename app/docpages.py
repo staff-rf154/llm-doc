@@ -6,11 +6,12 @@ from pathlib import Path
 from pypdf import PdfReader
 
 import config
+import tenancy
 
 PAGE_SEPARATORS = ("\f",)
 
 
-def list_documents() -> list[dict]:
+def list_documents(tenant: str | None = None) -> list[dict]:
     """Документы, доступные администратору для ссылки на страницу."""
     items: list[dict] = []
     for root in config.SOURCE_ROOTS:
@@ -27,6 +28,8 @@ def list_documents() -> list[dict]:
                 rel = str(path.relative_to(root_path))
             except ValueError:
                 rel = path.name
+            if tenant is not None and not tenancy.in_tenant(rel, tenant):
+                continue
             items.append(
                 {
                     "root": root,
@@ -38,9 +41,9 @@ def list_documents() -> list[dict]:
     return items
 
 
-def find_document(name: str) -> dict | None:
+def find_document(name: str, tenant: str | None = None) -> dict | None:
     target = name.strip().lower()
-    for item in list_documents():
+    for item in list_documents(tenant):
         if item["name"].lower() == target or Path(item["name"]).name.lower() == target:
             return item
     return None
@@ -140,9 +143,9 @@ def _text_page_text(path: str, start: int, end: int) -> str:
     return header + "\n\n" + "\n\n".join(blocks)
 
 
-def extract_pages(doc_name: str, doc_pages: str) -> str:
+def extract_pages(doc_name: str, doc_pages: str, tenant: str | None = None) -> str:
     """Текст указанных страниц документа; пустая строка, если документ не найден."""
-    document = find_document(doc_name)
+    document = find_document(doc_name, tenant)
     if not document:
         return ""
     pages = parse_pages(doc_pages)

@@ -7,6 +7,7 @@ import config
 import domains
 import metrics
 import settings
+import tenancy
 import vectorstore as vs
 from capabilities import is_capabilities_question, render as render_capabilities
 
@@ -159,13 +160,17 @@ def _to_chunk(point) -> RetrievedChunk:
     )
 
 
-def _dense_points(client, target: str, variant: str, limit: int) -> list:
+def _dense_points(
+    client, target: str, variant: str, limit: int, tenant: str | None = None
+) -> list:
+    query_filter = tenancy.qdrant_filter(tenant)
     try:
         return client.query_points(
             collection_name=target,
             query=vs.embed_query(variant),
             using="dense",
             limit=limit,
+            query_filter=query_filter,
             with_payload=True,
         ).points
     except Exception:
@@ -173,17 +178,20 @@ def _dense_points(client, target: str, variant: str, limit: int) -> list:
             collection_name=target,
             query=vs.embed_query(variant),
             limit=limit,
+            query_filter=query_filter,
             with_payload=True,
         ).points
 
 
-def _hybrid_points(client, target: str, variant: str, limit: int):
+def _hybrid_points(
+    client, target: str, variant: str, limit: int, tenant: str | None = None
+):
     """Dense + BM25 с слиянием RRF; при отсутствии sparse-индекса — только dense."""
     if not vs.sparse_enabled() or not vs.supports_sparse(target):
-        return _dense_points(client, target, variant, limit)
+        return _dense_points(client, target, variant, limit, tenant)
     sparse = vs.sparse_query(variant)
     if sparse is None:
-        return _dense_points(client, target, variant, limit)
+        return _dense_points(client, target, variant, limit, tenant)
     from qdrant_client.http import models
 
     prefetch = [
@@ -196,10 +204,11 @@ def _hybrid_points(client, target: str, variant: str, limit: int):
             prefetch=prefetch,
             query=models.FusionQuery(fusion=models.Fusion.RRF),
             limit=limit,
+            query_filter=tenancy.qdrant_filter(tenant),
             with_payload=True,
         ).points
     except Exception:
-        return _dense_points(client, target, variant, limit)
+        return _dense_points(client, target, variant, limit, tenant)
 
 
 def keep_count() -> int:
@@ -239,7 +248,11 @@ def rerank(
     return result
 
 
-def retrieve(query: str, top_k: int | None = None) -> list[RetrievedChunk]:
+def retrieve(
+    query: str, top_k: int | None = None, tenant: str | None = None
+) -> list[RetrievedChunk]:
+    if tenant is None:
+        tenant = settings.CURRENT_TENANT.get() or tenancy.DEFAULT
     started = time.perf_counter()
     top_k = top_k or settings.int_value("RETRIEVE_TOP_K")
     client = vs.get_qdrant()
@@ -250,7 +263,7 @@ def retrieve(query: str, top_k: int | None = None) -> list[RetrievedChunk]:
     pool = max(settings.int_value("HYBRID_CANDIDATES") or config.HYBRID_CANDIDATES, top_k)
     merged: dict[tuple[str, int], RetrievedChunk] = {}
     for variant in query_variants(query):
-        for point in _hybrid_points(client, target, variant, pool):
+        for point in _hybrid_points(client, target, variant, pool, tenant):
             chunk = _to_chunk(point)
             key = (chunk.source, chunk.chunk)
             previous = merged.get(key)
@@ -291,6 +304,7 @@ def build_prompt(
     question: str,
     chunks: list[RetrievedChunk],
     examples: list[dict] | None = None,
+    tenant: str | None = None,
 ) -> str:
     blocks = []
     for chunk in chunks:
@@ -300,7 +314,7 @@ def build_prompt(
             f"Документ: {name} ({chunk.source})\n"
             f"{chunk.text}\n</fragment>"
         )
-    lessons = lesson_examples(question)
+    lessons = lesson_examples(question, tenant)
     blocks_lessons = ""
     if lessons:
         import lessons as lessons_mod
@@ -353,39 +367,44 @@ def capabilities_answer() -> Answer:
     return Answer(text=render_capabilities(), chunks=[], grounded=True)
 
 
-def find_correction(question: str) -> dict | None:
+def find_correction(question: str, tenant: str | None = None) -> dict | None:
     try:
         import corrections
 
-        exact, _ = corrections.match(question)
+        exact, _ = corrections.match(question, tenant=tenant)
         return exact
     except Exception:
         return None
 
-def lesson_examples(question: str) -> list[dict]:
+
+def lesson_examples(question: str, tenant: str | None = None) -> list[dict]:
     try:
         import lessons
 
-        return lessons.relevant(question)
+        return lessons.relevant(question, tenant=tenant)
     except Exception:
         return []
 
 
-def correction_examples(question: str) -> list[dict]:
+def correction_examples(question: str, tenant: str | None = None) -> list[dict]:
     try:
         import corrections
 
-        _, examples = corrections.match(question)
+        _, examples = corrections.match(question, tenant=tenant)
         return examples
     except Exception:
         return []
 
 
-def ask(question: str, top_k: int | None = None) -> Answer:
+def ask(
+    question: str, top_k: int | None = None, tenant: str | None = None
+) -> Answer:
+    if tenant is None:
+        tenant = settings.CURRENT_TENANT.get() or tenancy.DEFAULT
     if is_capabilities_question(question):
         return capabilities_answer()
 
-    exact = find_correction(question)
+    exact = find_correction(question, tenant)
     if exact:
         answer = exact["answer"] + reference_block(
             exact.get("doc_name", ""), exact.get("doc_pages", "")
@@ -405,7 +424,7 @@ def ask(question: str, top_k: int | None = None) -> Answer:
             },
         )
 
-    chunks = retrieve(question, top_k)
+    chunks = retrieve(question, top_k, tenant=tenant)
     if not chunks:
         return Answer(
             text=empty_index_message(),
@@ -414,16 +433,18 @@ def ask(question: str, top_k: int | None = None) -> Answer:
         )
 
     client = get_client()
-    temperature = domains.temperature()
+    temperature = domains.temperature(tenant)
     if temperature is None:
         temperature = settings.float_value("LLM_TEMPERATURE")
     completion = client.chat.completions.create(
         model=settings.value("LLM_MODEL", config.LLM_MODEL),
         messages=[
-            {"role": "system", "content": domains.system_prompt()},
+            {"role": "system", "content": domains.system_prompt(tenant)},
             {
                 "role": "user",
-                "content": build_prompt(question, chunks, correction_examples(question)),
+                "content": build_prompt(
+                    question, chunks, correction_examples(question, tenant), tenant
+                ),
             },
         ],
         temperature=temperature,

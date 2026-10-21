@@ -18,6 +18,7 @@ from urllib.parse import unquote, urlparse
 import config
 import index_state
 import settings
+import tenancy
 import vectorstore as vs
 from loaders import (
     FORMAT_LABELS,
@@ -45,8 +46,11 @@ def docs_root() -> Path:
     return root
 
 
-def uploads_root() -> Path:
-    root = Path(config.UPLOADS_DIR)
+def uploads_root(tenant: str | None = None) -> Path:
+    if not tenant or tenancy.normalize(tenant) == tenancy.DEFAULT:
+        root = Path(config.UPLOADS_DIR)
+    else:
+        root = docs_root() / tenancy.rel_prefix(tenant) / "upload"
     root.mkdir(parents=True, exist_ok=True)
     return root
 
@@ -101,6 +105,20 @@ def is_uploaded(rel: str) -> bool:
     return uploads in target.parents or target.parent == uploads
 
 
+def tenant_rel(tenant: str | None, rel: str) -> str:
+    rel = safe_name(rel)
+    if tenant is None:
+        return rel
+    prefix = tenancy.rel_prefix(tenant)
+    if not prefix:
+        if rel == tenancy.PREFIX or rel.startswith(tenancy.PREFIX + "/"):
+            raise ValueError("Документ принадлежит другому тенанту")
+        return rel
+    if rel == prefix or rel.startswith(prefix + "/"):
+        return rel
+    return f"{prefix}/{rel}"
+
+
 def name_exists(rel: str) -> bool:
     return resolve(rel).exists()
 
@@ -120,11 +138,16 @@ def unique_path(rel: str) -> Path:
     raise ValueError("Не удалось подобрать свободное имя файла")
 
 
-def save_bytes(filename: str, content: bytes, folder: str = "") -> dict:
+def save_bytes(
+    filename: str, content: bytes, folder: str = "", tenant: str | None = None
+) -> dict:
     """Сохранить загруженный файл в каталог загрузок."""
     rel = safe_name(filename)
     if folder:
         rel = f"{safe_name(folder)}/{rel}"
+    elif tenant and tenancy.normalize(tenant) != tenancy.DEFAULT:
+        rel = f"upload/{rel}"
+    rel = tenant_rel(tenant, rel)
     if not rel:
         raise ValueError("Не удалось определить имя файла")
     check_extension(rel)
@@ -157,7 +180,7 @@ def name_from_url(url: str) -> str:
     return safe_name(name)
 
 
-def _download(url: str, client) -> dict:
+def _download(url: str, client, tenant: str | None = None) -> dict:
     """Одна ссылка: скачать файл и сохранить в каталог загрузок."""
     response = client.get(url)
     response.raise_for_status()
@@ -182,7 +205,7 @@ def _download(url: str, client) -> dict:
         name = f"{Path(name).stem or 'document'}{guessed}"
     check_extension(name)
 
-    target_dir = uploads_root()
+    target_dir = uploads_root(tenant)
     with _LOCK:
         path = unique_path(str(target_dir / name).replace(str(docs_root()) + "/", ""))
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -199,7 +222,7 @@ def _download(url: str, client) -> dict:
     }
 
 
-def fetch_url(url: str, folder: str = "") -> dict:
+def fetch_url(url: str, folder: str = "", tenant: str | None = None) -> dict:
     """Скачать документ по http-ссылке в каталог загрузок (или указанную папку)."""
     import httpx
 
@@ -213,9 +236,9 @@ def fetch_url(url: str, folder: str = "") -> dict:
         timeout=_url_timeout(),
         headers={"User-Agent": config.WEB_CRAWL_USER_AGENT},
     ) as client:
-        result = _download(url.strip(), client)
+        result = _download(url.strip(), client, tenant)
     if folder:
-        target = resolve(f"{safe_name(folder)}/{Path(result['name']).name}")
+        target = resolve(tenant_rel(tenant, f"{safe_name(folder)}/{Path(result['name']).name}"))
         target.parent.mkdir(parents=True, exist_ok=True)
         path = unique_path(str(target).replace(str(docs_root()) + "/", ""))
         shutil.move(result["path"], path)
@@ -225,7 +248,7 @@ def fetch_url(url: str, folder: str = "") -> dict:
     return result
 
 
-def fetch_urls(text: str, folder: str = "") -> dict:
+def fetch_urls(text: str, folder: str = "", tenant: str | None = None) -> dict:
     """Скачать несколько ссылок, каждая с новой строки.
 
     Возвращает результаты по каждой ссылке: успешные — с данными файла,
@@ -243,9 +266,9 @@ def fetch_urls(text: str, folder: str = "") -> dict:
                 parsed = urlparse(url)
                 if parsed.scheme not in ("http", "https") or not parsed.netloc:
                     raise ValueError("Нужна ссылка http:// или https://")
-                item = _download(url, client)
+                item = _download(url, client, tenant)
                 if folder:
-                    target_rel = f"{safe_name(folder)}/{Path(item['name']).name}"
+                    target_rel = tenant_rel(tenant, f"{safe_name(folder)}/{Path(item['name']).name}")
                     target = resolve(target_rel)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     path = unique_path(target_rel)
@@ -273,11 +296,11 @@ def httpx_client():
     )
 
 
-def index_document(rel: str) -> dict:
+def index_document(rel: str, tenant: str | None = None) -> dict:
     """Точечно проиндексировать документ из каталога документации."""
     import ingest
 
-    rel = safe_name(rel)
+    rel = tenant_rel(tenant, rel)
     target = resolve(rel)
     if not target.exists() or not target.is_file():
         raise FileNotFoundError(f"Файл не найден: {rel}")
@@ -294,9 +317,9 @@ def _writable(rel: str) -> bool:
         return False
 
 
-def delete_document(rel: str) -> dict:
+def delete_document(rel: str, tenant: str | None = None) -> dict:
     """Удалить документ: файл и точки из индекса."""
-    rel = safe_name(rel)
+    rel = tenant_rel(tenant, rel)
     target = resolve(rel)
     collection = vs.target_name()
     removed_file = False
@@ -317,38 +340,43 @@ def delete_document(rel: str) -> dict:
     }
 
 
-def restore_document(rel: str) -> dict:
+def restore_document(rel: str, tenant: str | None = None) -> dict:
     """Вернуть документ в индекс."""
     import appdb
 
-    rel = safe_name(rel)
+    rel = tenant_rel(tenant, rel)
     appdb.remove_exclusion(config.DOCS_DIR, rel)
     path = resolve(rel)
     if not path.is_file():
         raise FileNotFoundError(f"Файл не найден: {rel}")
-    return index_document(rel)
+    return index_document(rel, tenant)
 
 
-def create_folder(rel: str) -> dict:
+def create_folder(rel: str, tenant: str | None = None) -> dict:
     """Создать папку в каталоге документации."""
-    rel = safe_name(rel)
+    rel = tenant_rel(tenant, rel)
     if not rel:
         raise ValueError("Укажите имя папки")
     target = resolve(rel)
     target.mkdir(parents=True, exist_ok=True)
-    uploads_root().mkdir(parents=True, exist_ok=True)
+    uploads_root(tenant).mkdir(parents=True, exist_ok=True)
     return {"name": rel, "created": True}
 
 
-def delete_folder(rel: str) -> dict:
+def delete_folder(rel: str, tenant: str | None = None) -> dict:
     """Удалить папку вместе с содержимым."""
-    rel = safe_name(rel)
+    rel = tenant_rel(tenant, rel)
     if not rel:
         raise ValueError("Укажите имя папки")
     target = resolve(rel)
     if not target.is_dir():
         raise FileNotFoundError(f"Папка не найдена: {rel}")
-    if target.resolve() in (docs_root().resolve(), uploads_root().resolve()):
+    if target.resolve() in (
+        docs_root().resolve(),
+        uploads_root(tenant).resolve(),
+        uploads_root().resolve(),
+        (docs_root() / tenancy.rel_prefix(tenant)).resolve() if tenant else docs_root().resolve(),
+    ):
         raise ValueError("Корневую папку удалить нельзя")
     removed = 0
     collection = vs.target_name()
@@ -361,17 +389,20 @@ def delete_folder(rel: str) -> dict:
     return {"name": rel, "removed_files": removed}
 
 
-def list_folders() -> list[str]:
+def list_folders(tenant: str | None = None) -> list[str]:
     """Все папки каталога документации относительно корня."""
     root = docs_root()
     folders: list[str] = []
     for path in sorted(root.rglob("*")):
         if path.is_dir() and not any(part.startswith(".") for part in path.relative_to(root).parts):
-            folders.append(str(path.relative_to(root)))
+            rel = str(path.relative_to(root))
+            if tenant is not None and not tenancy.in_tenant(rel, tenant):
+                continue
+            folders.append(rel)
     return folders
 
 
-def list_documents() -> list[dict]:
+def list_documents(tenant: str | None = None) -> list[dict]:
     """Файлы каталога документации и их состояние в индексе."""
     import appdb
 
@@ -393,6 +424,8 @@ def list_documents() -> list[dict]:
         try:
             rel = str(path.relative_to(root))
         except ValueError:
+            continue
+        if tenant is not None and not tenancy.in_tenant(rel, tenant):
             continue
         stat = path.stat()
         items.append(

@@ -201,8 +201,10 @@
         <input id="new-password" type="password" placeholder="Пароль" style="max-width:200px">
         <select id="new-role" style="max-width:160px">
           <option value="user">Пользователь</option>
+          <option value="tenant_admin">Администратор тенанта</option>
           <option value="admin">Администратор</option>
         </select>
+        <input id="new-tenant" placeholder="Тенант (slug)" style="max-width:160px">
         <button class="primary" id="create-user">Создать</button>
         <span class="muted" id="users-msg"></span>
       </div>
@@ -211,7 +213,7 @@
       <h2>Пользователи</h2>
       <table id="users-table">
         <thead><tr>
-          <th>ID</th><th>Логин</th><th>Роль</th><th>Статус</th>
+          <th>ID</th><th>Логин</th><th>Роль</th><th>Тенант</th><th>Статус</th>
           <th>Запросов</th><th>👍</th><th>👎</th><th>Последний</th><th></th>
         </tr></thead>
         <tbody></tbody>
@@ -819,10 +821,32 @@ function el(tag, props, children) {
 }
 
 function applyNav() {
-  const isSystem = currentUser && currentUser.role === 'system';
-  document.querySelectorAll('nav button[data-tab="models"], nav button[data-tab="domains"]').forEach(b => b.style.display = isSystem ? '' : 'none');
+  const role = currentUser && currentUser.role;
+  const isSystem = role === 'system';
+  const isTenant = role === 'tenant_admin';
+  const allowed = isTenant
+    ? new Set(['overview', 'users', 'requests', 'corrections', 'domains', 'docs'])
+    : null;
+  document.querySelectorAll('nav button[data-tab]').forEach(b => {
+    b.style.display = !allowed || allowed.has(b.dataset.tab) ? '' : 'none';
+  });
+  document.querySelectorAll('nav button[data-tab="models"]').forEach(b => {
+    b.style.display = isSystem ? '' : 'none';
+  });
+  document.querySelectorAll('nav button[data-tab="domains"]').forEach(b => {
+    b.style.display = isSystem || isTenant || role === 'admin' ? '' : 'none';
+  });
   const domainCard = document.getElementById('domain-card');
   if (domainCard) domainCard.style.display = isSystem ? '' : 'none';
+  const roleSelect = document.getElementById('new-role');
+  if (roleSelect) {
+    roleSelect.querySelectorAll('option[value="admin"], option[value="tenant_admin"]').forEach(o => o.style.display = isTenant ? 'none' : '');
+    roleSelect.value = 'user';
+  }
+  const tenantInput = document.getElementById('new-tenant');
+  if (tenantInput) {
+    tenantInput.style.display = isTenant ? 'none' : '';
+  }
 }
 document.querySelectorAll('nav button').forEach(btn => {
   btn.addEventListener('click', () => {
@@ -952,6 +976,7 @@ async function loadUsers() {
       el('td', { textContent: u.id }),
       el('td', { textContent: u.username }),
       el('td', {}, [el('span', { className: 'pill ' + (u.role === 'admin' ? 'admin' : ''), textContent: u.role })]),
+      el('td', { textContent: u.tenant_id || 'default' }),
       el('td', { textContent: u.active ? 'активен' : 'отключён' }),
       el('td', { textContent: u.requests }),
       el('td', { textContent: u.likes }),
@@ -960,10 +985,10 @@ async function loadUsers() {
       el('td', {}, [
         el('button', { textContent: 'Пароль', onclick: () => resetPassword(u.id) }),
         el('button', { textContent: u.active ? 'Отключить' : 'Включить', onclick: () => toggleUser(u.id, !u.active) }),
-        el('button', {
+        ...(currentUser && currentUser.role === 'tenant_admin' ? [] : [el('button', {
           textContent: u.role === 'admin' ? 'Сделать user' : 'Сделать admin',
           onclick: () => changeRole(u.id, u.role === 'admin' ? 'user' : 'admin')
-        }),
+        })]),
         el('button', { className: 'danger', textContent: 'Удалить', onclick: () => removeUser(u.id, u.username) })
       ])
     ]));
@@ -979,7 +1004,8 @@ document.getElementById('create-user').addEventListener('click', async () => {
       body: JSON.stringify({
         username: document.getElementById('new-username').value.trim(),
         password: document.getElementById('new-password').value,
-        role: document.getElementById('new-role').value
+        role: document.getElementById('new-role').value,
+        tenant_id: document.getElementById('new-tenant').value.trim() || null
       })
     });
     msg.textContent = 'Пользователь создан';
@@ -1883,7 +1909,7 @@ let domCache = [];
 let domEditing = null;
 
 async function loadDomain() {
-  if (!currentUser || currentUser.role !== 'system') return;
+  if (!currentUser || !['system', 'tenant_admin'].includes(currentUser.role)) return;
   const data = await j('/api/admin/domain');
   domCache = data.profiles || [];
   const select = document.getElementById('domain-select');

@@ -13,6 +13,7 @@ import config
 import docpages
 import rag
 import settings
+import tenancy
 import vectorstore as vs
 
 VERIFY_PROMPT = (
@@ -34,12 +35,13 @@ JUDGE_SYSTEM = (
 )
 
 
-def verify_one(correction: dict) -> dict:
+def verify_one(correction: dict, tenant: str | None = None) -> dict:
     """Проверить одно исправление. Возвращает статус, комментарий и причину."""
     doc_name = correction.get("doc_name") or ""
     doc_pages = correction.get("doc_pages") or ""
     question = correction.get("question", "")
     answer = correction.get("answer", "")
+    scope = tenant or correction.get("tenant_id") or tenancy.DEFAULT
 
     if not doc_name or not doc_pages:
         return {
@@ -48,7 +50,7 @@ def verify_one(correction: dict) -> dict:
             "collection": "",
         }
 
-    document = docpages.find_document(doc_name)
+    document = docpages.find_document(doc_name, scope)
     if not document:
         return {
             "status": "review",
@@ -56,7 +58,7 @@ def verify_one(correction: dict) -> dict:
             "collection": "",
         }
 
-    pages_text = docpages.extract_pages(doc_name, doc_pages)
+    pages_text = docpages.extract_pages(doc_name, doc_pages, scope)
     if not pages_text.strip():
         return {
             "status": "review",
@@ -71,7 +73,7 @@ def verify_one(correction: dict) -> dict:
         }
 
     target = vs.target_name()
-    indexed_note = _index_note(question, target)
+    indexed_note = _index_note(question, target, scope)
 
     client = rag.get_client()
     prompt = (
@@ -120,7 +122,9 @@ def _extract_comment(text: str) -> str:
     return ""
 
 
-def _index_note(question: str, collection: str, top_k: int = 3) -> str:
+def _index_note(
+    question: str, collection: str, tenant: str | None = None, top_k: int = 3
+) -> str:
     client = vs.get_qdrant()
     if not client.collection_exists(collection):
         return "В индексе документации пока нет данных."
@@ -128,6 +132,7 @@ def _index_note(question: str, collection: str, top_k: int = 3) -> str:
         points = client.query_points(
             collection_name=collection,
             query=vs.embed_query(question),
+            query_filter=tenancy.qdrant_filter(tenant),
             limit=top_k,
             with_payload=True,
         ).points
@@ -165,6 +170,7 @@ class VerifyJob:
             "review": 0,
             "failed": [],
             "error": None,
+            "tenant": None,
         }
 
     def snapshot(self) -> dict:
@@ -175,7 +181,7 @@ class VerifyJob:
         with self._lock:
             self.state.update(fields)
 
-    def start(self) -> dict:
+    def start(self, tenant: str | None = None) -> dict:
         with self._lock:
             if self.state["status"] == "running" and self._thread and self._thread.is_alive():
                 return {**self.state, "started": False}
@@ -183,15 +189,16 @@ class VerifyJob:
                 **self._idle(),
                 "status": "running",
                 "started_at": datetime.now().isoformat(timespec="seconds"),
+                "tenant": tenant,
             }
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread = threading.Thread(target=self._run, args=(tenant,), daemon=True)
         self._thread.start()
         return {**self.snapshot(), "started": True}
 
-    def _run(self) -> None:
+    def _run(self, tenant: str | None = None) -> None:
         try:
             result = verify_all(
-                progress=lambda **fields: self._update(**fields)
+                progress=lambda **fields: self._update(**fields), tenant=tenant
             )
             self._update(
                 status="done",
@@ -206,9 +213,11 @@ class VerifyJob:
             )
 
 
-def verify_all(progress=None) -> dict:
+def verify_all(progress=None, tenant: str | None = None) -> dict:
     corrections = [
-        item for item in appdb.list_corrections() if item["status"] == "active"
+        item
+        for item in appdb.list_corrections(tenant=tenant)
+        if item["status"] == "active"
     ]
     if progress:
         progress(done=0, total=len(corrections))
@@ -218,7 +227,7 @@ def verify_all(progress=None) -> dict:
     failed: list[dict] = []
     for index, correction in enumerate(corrections, start=1):
         try:
-            result = verify_one(correction)
+            result = verify_one(correction, tenant)
         except Exception as exc:
             failed.append({"source": f"#{correction['id']}", "error": f"{type(exc).__name__}: {exc}"})
             if progress:
