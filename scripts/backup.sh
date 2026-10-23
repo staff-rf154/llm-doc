@@ -7,8 +7,22 @@ TS=$(date +%Y%m%d-%H%M%S)
 DIR="data/backups/$TS"
 mkdir -p "$DIR"
 
-echo "[1/5] SQLite"
-python3 - "$DIR" <<'PY'
+echo "[1/5] PostgreSQL"
+PGUSER=$(python3 -c 'import json,os; p="data/app/db_connection.json"; print(json.load(open(p)).get("user","") if os.path.exists(p) else "")' 2>/dev/null || true)
+PGDB=$(python3 -c 'import json,os; p="data/app/db_connection.json"; print(json.load(open(p)).get("database","") if os.path.exists(p) else "")' 2>/dev/null || true)
+if [ -z "$PGUSER" ]; then
+  PGUSER=$(grep -E '^POSTGRES_USER=' .env 2>/dev/null | cut -d= -f2- || true)
+fi
+if [ -z "$PGDB" ]; then
+  PGDB=$(grep -E '^POSTGRES_DB=' .env 2>/dev/null | cut -d= -f2- || true)
+fi
+PGUSER=${PGUSER:-llm}
+PGDB=${PGDB:-llm}
+docker compose exec -T postgres pg_dump -U "$PGUSER" -d "$PGDB" -Fc > "$DIR/postgres.dump"
+
+echo "[1/5] SQLite (legacy, для отката)"
+mkdir -p "$DIR/legacy_sqlite"
+python3 - "$DIR/legacy_sqlite" <<'PY'
 import os
 import sqlite3
 import sys

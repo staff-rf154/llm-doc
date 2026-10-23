@@ -1,4 +1,4 @@
-.PHONY: up down build ingest ingest-dry ask evaluate evaluate-ragas evaluate-regression logs pull-llm ps clean reindex reindex-status reindex-pause reindex-resume prompts synonyms synonyms-expand seed-synonyms super-test backup restore backup-status
+.PHONY: up down build ingest ingest-dry ask evaluate evaluate-ragas evaluate-regression logs pull-llm ps clean reindex reindex-status reindex-pause reindex-resume prompts synonyms synonyms-expand seed-synonyms super-test backup restore backup-status migrate-db
 
 up:
 	docker compose up -d --build
@@ -65,6 +65,9 @@ evaluate-ragas:
 evaluate-regression:
 	docker compose exec -T app python eval/eval.py
 	docker compose exec -T app python eval/regression.py
+
+migrate-db:
+	docker compose run --rm app python migrate_sqlite_to_pg.py
 
 backup:
 	./scripts/backup.sh

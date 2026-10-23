@@ -1,6 +1,22 @@
 name: llm-doc
 
 services:
+  postgres:
+    image: postgres:16
+    container_name: llm-postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-llm}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-llm}
+    volumes:
+      - ./data/postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    restart: unless-stopped
+
   qdrant:
     image: qdrant/qdrant:latest
     container_name: llm-qdrant
@@ -52,8 +68,7 @@ services:
       - HF_HUB_DISABLE_TELEMETRY=1
       - OMP_NUM_THREADS=${OMP_NUM_THREADS:-4}
       - EMBED_BATCH=${EMBED_BATCH:-16}
-      - APP_DB=/data/app/app.db
-      - SETTINGS_DB=/data/settings/settings.db
+      - DATABASE_URL=${DATABASE_URL}
       - BACKUP_DIR=/data/backups
       - ADMIN_USERNAME=${ADMIN_USERNAME:-}
       - ADMIN_PASSWORD=${ADMIN_PASSWORD:-}
@@ -121,6 +136,8 @@ services:
       - "${APP_PORT}:8000"
     depends_on:
       qdrant:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
     command: uvicorn main:app --host 0.0.0.0 --port 8000
     restart: unless-stopped

@@ -1,5 +1,7 @@
 import os
 
+DATABASE_URL = os.getenv("DATABASE_URL", "")
+
 QDRANT_URL = os.getenv("QDRANT_URL", "http://qdrant:6333")
 QDRANT_API_KEY = os.getenv("QDRANT_API_KEY") or None
 QDRANT_COLLECTION = os.getenv("QDRANT_COLLECTION", "docs")
@@ -46,6 +48,7 @@ CORRECTIONS_COLLECTION = os.getenv("CORRECTIONS_COLLECTION", "corrections")
 CORRECTION_MATCH_THRESHOLD = float(os.getenv("CORRECTION_MATCH_THRESHOLD", "0.86"))
 CORRECTION_EXAMPLES = int(os.getenv("CORRECTION_EXAMPLES", "2"))
 CORRECTION_OVERLAP_WORDS = int(os.getenv("CORRECTION_OVERLAP_WORDS", "2"))
+CORRECTION_MODEL_VERIFY = os.getenv("CORRECTION_MODEL_VERIFY", "1") not in ("0", "false", "False")
 SYNONYMS_DB = os.getenv("SYNONYMS_DB", "/data/synonyms/synonyms.db")
 SYNONYMS_CACHE_TTL = int(os.getenv("SYNONYMS_CACHE_TTL", "300"))
 SYNONYMS_SEED_ON_START = os.getenv("SYNONYMS_SEED_ON_START", "1") not in ("0", "false", "False")
@@ -59,7 +62,7 @@ AUTOLEARN_LLM_ENABLED = os.getenv("AUTOLEARN_LLM_ENABLED", "1") not in ("0", "fa
 AUTOLEARN_MAX_TOPICS = int(os.getenv("AUTOLEARN_MAX_TOPICS", "300"))
 AUTOLEARN_MIN_JUDGE_SCORE = float(os.getenv("AUTOLEARN_MIN_JUDGE_SCORE", "0.6"))
 JUDGE_BASE_URL = os.getenv("JUDGE_BASE_URL", "")
-JUDGE_API_KEY = os.getenv("JUDGE_API_KEY", "")
+JUDGE_API_KEY = os.getenv("JUDGE_API_KEY", LLM_API_KEY)
 JUDGE_MODEL = os.getenv("JUDGE_MODEL", "")
 JUDGE_FEWSHOT_PATH = os.getenv("JUDGE_FEWSHOT_PATH", "/data/eval/judge_fewshot.json")
 QUESTIONGEN_COUNT = int(os.getenv("QUESTIONGEN_COUNT", "10"))
@@ -111,9 +114,15 @@ SYSTEM_PROMPT = (
     "названия параметров, номера страниц и факты — опирайся только на текст фрагментов. "
     "Если фрагментов недостаточно для полного ответа, скажи, чего в них не хватает, "
     "и предложи уточнить вопрос. "
-    "Отвечай на языке вопроса. "
-    "Указывай источники в формате [doc:chunk], называй полное название документа, "
-    "откуда взята информация, и рекомендуй ознакомиться с ним подробнее. "
+    "Если в запросе переданы исправление администратора или примеры исправлений, "
+    "сначала сверь их с фрагментами документации. Подтверждённое исправление "
+    "используй как основу ответа; если оно противоречит документации или не "
+    "подтверждается ею, отвечай по документации и коротко укажи расхождение. "
+    "Не считай исправление доказанным без сверки. "
+    "Всегда отвечай на языке вопроса. "
+    "Для каждого использованного факта указывай источник в формате [doc:chunk], "
+    "называй полное название документа, откуда взята информация, и рекомендуй "
+    "ознакомиться с ним подробнее. Если источников несколько, перечисли их все. "
     "В документации часто повторяется одна и та же информация — объединяй повторы "
     "и давай один цельный ответ без дублирования. "
     "Если пользователь спрашивает, что ты умеешь, перечисли свои возможности "

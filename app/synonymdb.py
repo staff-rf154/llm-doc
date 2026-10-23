@@ -1,11 +1,10 @@
 """Словарь синонимов: отдельная БД SQLite, используется для расширения запроса."""
 
-import re
-import sqlite3
 import threading
 from datetime import datetime
 
 import config
+import db
 
 _LOCK = threading.RLock()
 _INIT_DONE = False
@@ -20,11 +19,8 @@ CREATE TABLE IF NOT EXISTS synonyms (
 """
 
 
-def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(config.SYNONYMS_DB, timeout=30, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+def connect():
+    return db.connect("synonyms")
 
 
 def ensure_schema() -> None:
@@ -33,7 +29,7 @@ def ensure_schema() -> None:
         if _INIT_DONE:
             return
         with connect() as conn:
-            conn.executescript(SCHEMA)
+            db.exec_script(conn, SCHEMA)
         _INIT_DONE = True
 
 
@@ -58,7 +54,7 @@ def get_term(term: str) -> dict | None:
     ensure_schema()
     with connect() as conn:
         row = conn.execute(
-            "SELECT term, synonyms, author, updated_at FROM synonyms WHERE term = ?",
+            "SELECT term, synonyms, author, updated_at FROM synonyms WHERE term = %s",
             (_normalize(term),),
         ).fetchone()
     return dict(row) if row else None
@@ -75,7 +71,7 @@ def set_term(term: str, synonyms: list[str], author: str = "") -> dict:
         conn.execute(
             """
             INSERT INTO synonyms (term, synonyms, author, updated_at)
-            VALUES (?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s)
             ON CONFLICT(term) DO UPDATE SET
                 synonyms = excluded.synonyms,
                 author = excluded.author,
@@ -89,7 +85,7 @@ def set_term(term: str, synonyms: list[str], author: str = "") -> dict:
 def delete_term(term: str) -> bool:
     ensure_schema()
     with _LOCK, connect() as conn:
-        cur = conn.execute("DELETE FROM synonyms WHERE term = ?", (_normalize(term),))
+        cur = conn.execute("DELETE FROM synonyms WHERE term = %s", (_normalize(term),))
     return bool(cur.rowcount)
 
 
@@ -106,7 +102,7 @@ def import_many(items: dict[str, list[str]], author: str = "") -> int:
             conn.execute(
                 """
                 INSERT INTO synonyms (term, synonyms, author, updated_at)
-                VALUES (?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s)
                 ON CONFLICT(term) DO UPDATE SET
                     synonyms = excluded.synonyms,
                     author = excluded.author,
@@ -132,7 +128,7 @@ def export_many() -> dict[str, list[str]]:
         rows = conn.execute("SELECT term, synonyms FROM synonyms ORDER BY term").fetchall()
     result: dict[str, list[str]] = {}
     for row in rows:
-        values = [s for s in row["synonyms"].split(",") if s]
+        values = [s.strip() for s in row["synonyms"].split(",") if s.strip()]
         if values:
             result[row["term"]] = values
     return result
@@ -170,7 +166,7 @@ def _load_map() -> dict[str, list[str]]:
     else:
         base_map = {}
         for row in list_terms():
-            values = [s for s in row["synonyms"].split(",") if s]
+            values = [s.strip() for s in row["synonyms"].split(",") if s.strip()]
             if values:
                 base_map[row["term"]] = values
         _cache.update(at=now, map=base_map)
@@ -222,39 +218,134 @@ def _tokenize(text: str) -> list[str]:
     return tokens
 
 
+def _token_spans(text: str) -> list[tuple[str, int, int]]:
+    spans: list[tuple[str, int, int]] = []
+    buffer = ""
+    start = 0
+    for index, char in enumerate(text):
+        if char.isalnum():
+            if not buffer:
+                start = index
+            buffer += char.lower()
+        else:
+            if buffer:
+                spans.append((buffer, start, index))
+                buffer = ""
+    if buffer:
+        spans.append((buffer, start, len(text)))
+    return spans
+
+
+def _find_phrase(text: str, phrase: str) -> tuple[int, int] | None:
+    words = _tokenize(phrase)
+    if not words:
+        return None
+    spans = _token_spans(text)
+    if len(words) > len(spans):
+        return None
+    needles = [stem(word) for word in words]
+    for index in range(len(spans) - len(needles) + 1):
+        if all(stem(spans[index + offset][0]) == needles[offset] for offset in range(len(needles))):
+            return spans[index][1], spans[index + len(needles) - 1][2]
+    return None
+
+
 def _replace_word(base: str, word: str, value: str) -> str:
-    replaced = re.sub(re.escape(word), value, base, count=1, flags=re.IGNORECASE)
-    return " ".join(replaced.split())
+    span = _find_phrase(base, word)
+    if not span:
+        return base
+    start, end = span
+    return " ".join((base[:start] + value + base[end:]).split())
+
+
+def _replace_phrase(base: str, phrase: str, value: str) -> str:
+    span = _find_phrase(base, phrase)
+    if not span:
+        return base
+    start, end = span
+    return " ".join((base[:start] + value + base[end:]).split())
 
 
 def _stems(text: str) -> set[str]:
     return {stem(word) for word in _tokenize(text)}
 
 
+def matched_terms(question: str, max_terms: int = 8) -> list[tuple[str, list[str]]]:
+    """Термины словаря, которые встречаются в вопросе прямо или через синоним."""
+    base = " ".join(question.split())
+    if not base:
+        return []
+    mapping = _load_map()
+    if not mapping:
+        return []
+    lower = base.lower()
+    base_stems = _stems(base)
+    limit = max(1, int(max_terms))
+    result: list[tuple[str, list[str]]] = []
+    seen: set[str] = set()
+    for term, values in mapping.items():
+        term_norm = _normalize(term)
+        if not term_norm:
+            continue
+        matched = False
+        if " " in term_norm:
+            matched = _find_phrase(lower, term_norm) is not None
+        else:
+            matched = stem(term_norm) in base_stems
+        if not matched:
+            for value in values:
+                value_norm = _normalize(value)
+                if not value_norm or value_norm == term_norm:
+                    continue
+                if " " in value_norm:
+                    if _find_phrase(lower, value_norm) is not None:
+                        matched = True
+                        break
+                elif stem(value_norm) in base_stems:
+                    matched = True
+                    break
+        if matched and term_norm not in seen:
+            seen.add(term_norm)
+            result.append((term_norm, list(values)))
+            if len(result) >= limit:
+                break
+    return result
+
+
 def expand(question: str, max_variants: int = 6) -> list[str]:
-    """Варианты запроса: оригинал плюс подстановки синонимов найденных слов."""
+    """Варианты запроса: оригинал плюс подстановки синонимов в обе стороны."""
     base = " ".join(question.split())
     mapping = _load_map()
     if not mapping:
         return [base]
 
+    limit = max(1, int(max_variants))
     variants = [base]
     base_stems = _stems(base)
 
     def add_variant(candidate: str) -> None:
-        if candidate != base and candidate not in variants and len(variants) <= max_variants:
+        candidate = " ".join(candidate.split())
+        if (
+            candidate
+            and candidate != base
+            and candidate not in variants
+            and len(variants) < limit
+        ):
             variants.append(candidate)
 
     for term, values in mapping.items():
-        if " " in term:
-            if term in base.lower():
+        term_norm = _normalize(term)
+        if not term_norm:
+            continue
+        if " " in term_norm:
+            if _find_phrase(base, term_norm) is not None:
                 for value in values:
-                    add_variant(
-                        " ".join(re.sub(re.escape(term), value, base, flags=re.IGNORECASE).split())
-                    )
+                    add_variant(_replace_phrase(base, term_norm, value))
+            if len(variants) >= limit:
+                break
             continue
         for word in _tokenize(base):
-            if stem(word) != stem(term):
+            if stem(word) != stem(term_norm):
                 continue
             for value in values:
                 head = _tokenize(value)[0] if _tokenize(value) else ""
@@ -262,7 +353,47 @@ def expand(question: str, max_variants: int = 6) -> list[str]:
                     continue
                 add_variant(_replace_word(base, word, value))
             break
-        if len(variants) > max_variants:
+        if len(variants) >= limit:
             break
+
+    if len(variants) < limit:
+        hits: list[tuple[str, str, str, list[str]]] = []
+        for term, values in mapping.items():
+            term_norm = _normalize(term)
+            if not term_norm:
+                continue
+            for value in values:
+                value_norm = _normalize(value)
+                if not value_norm or value_norm == term_norm:
+                    continue
+                if " " in value_norm:
+                    if _find_phrase(base, value_norm) is not None:
+                        hits.append((term_norm, value_norm, "", values))
+                else:
+                    for word in _tokenize(base):
+                        if stem(word) == stem(value_norm):
+                            hits.append((term_norm, value_norm, word, values))
+                            break
+        for term_norm, value_norm, word, _ in hits:
+            if word:
+                add_variant(_replace_word(base, word, term_norm))
+            else:
+                add_variant(_replace_phrase(base, value_norm, term_norm))
+            if len(variants) >= limit:
+                break
+        if len(variants) < limit:
+            for term_norm, value_norm, word, values in hits:
+                for other in values:
+                    other_norm = _normalize(other)
+                    if not other_norm or other_norm == value_norm:
+                        continue
+                    if word:
+                        add_variant(_replace_word(base, word, other_norm))
+                    else:
+                        add_variant(_replace_phrase(base, value_norm, other_norm))
+                    if len(variants) >= limit:
+                        break
+                if len(variants) >= limit:
+                    break
 
     return variants

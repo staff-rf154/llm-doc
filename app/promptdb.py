@@ -1,15 +1,15 @@
-import sqlite3
 import threading
 from datetime import datetime
 
 import config
+import db
 
 _LOCK = threading.Lock()
 _INIT_DONE = False
 
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS prompts (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    id BIGSERIAL PRIMARY KEY,
     text TEXT NOT NULL UNIQUE,
     product TEXT NOT NULL DEFAULT '',
     keywords TEXT NOT NULL DEFAULT '',
@@ -21,11 +21,8 @@ CREATE INDEX IF NOT EXISTS idx_prompts_active ON prompts(active);
 """
 
 
-def connect() -> sqlite3.Connection:
-    conn = sqlite3.connect(config.PROMPTS_DB, timeout=30, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA journal_mode=WAL")
-    return conn
+def connect():
+    return db.connect("prompts")
 
 
 def ensure_schema() -> None:
@@ -34,7 +31,7 @@ def ensure_schema() -> None:
         if _INIT_DONE:
             return
         with connect() as conn:
-            conn.executescript(SCHEMA)
+            db.exec_script(conn, SCHEMA)
         _INIT_DONE = True
 
 
@@ -66,7 +63,7 @@ def upsert_prompts(items: list[dict], replace: bool = False) -> int:
             conn.execute(
                 """
                 INSERT INTO prompts (text, product, keywords, source_url, active, created_at)
-                VALUES (?, ?, ?, ?, 1, ?)
+                VALUES (%s, %s, %s, %s, 1, %s)
                 ON CONFLICT(text) DO UPDATE SET
                     product = excluded.product,
                     keywords = excluded.keywords,
@@ -88,7 +85,7 @@ def set_active(texts: list[str], active: bool) -> int:
     ensure_schema()
     with _LOCK, connect() as conn:
         cur = conn.executemany(
-            "UPDATE prompts SET active = ? WHERE text = ?",
+            "UPDATE prompts SET active = %s WHERE text = %s",
             [(1 if active else 0, text) for text in texts],
         )
     return cur.rowcount if cur.rowcount and cur.rowcount > 0 else 0

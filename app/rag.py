@@ -263,7 +263,11 @@ def retrieve(
     pool = max(settings.int_value("HYBRID_CANDIDATES") or config.HYBRID_CANDIDATES, top_k)
     merged: dict[tuple[str, int], RetrievedChunk] = {}
     for variant in query_variants(query):
-        for point in _hybrid_points(client, target, variant, pool, tenant):
+        try:
+            points = _hybrid_points(client, target, variant, pool, tenant)
+        except Exception:
+            continue
+        for point in points:
             chunk = _to_chunk(point)
             key = (chunk.source, chunk.chunk)
             previous = merged.get(key)
@@ -300,11 +304,42 @@ def expand_parents(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
     return result
 
 
+def correction_reference(correction: dict | None) -> dict | None:
+    if not correction:
+        return None
+    return {
+        "doc_name": correction.get("doc_name", ""),
+        "doc_pages": correction.get("doc_pages", ""),
+        "doc_ref": correction.get("doc_ref", ""),
+        "author": correction.get("author", ""),
+        "updated_at": correction.get("updated_at", ""),
+        "correction_id": correction.get("correction_id", 0),
+    }
+
+
+def correction_block(correction: dict | None) -> str:
+    if not correction:
+        return ""
+    source = correction.get("doc_ref") or correction.get("doc_name", "")
+    return (
+        "<correction priority=\"high\">\n"
+        f"Вопрос: {correction.get('question', '')}\n"
+        f"Исправленный ответ администратора: {correction.get('answer', '')}\n"
+        f"Источник исправления: {source}\n"
+        "</correction>\n\n"
+        "Проверь исправление по фрагментам документации. Если оно подтверждается, "
+        "используй его как основу ответа и сохрани проверенные шаги. Если исправление "
+        "противоречит документации или не подтверждается ею, отвечай по фрагментам "
+        "и коротко укажи расхождение.\n\n"
+    )
+
+
 def build_prompt(
     question: str,
     chunks: list[RetrievedChunk],
     examples: list[dict] | None = None,
     tenant: str | None = None,
+    correction: dict | None = None,
 ) -> str:
     blocks = []
     for chunk in chunks:
@@ -320,17 +355,49 @@ def build_prompt(
         import lessons as lessons_mod
 
         blocks_lessons = lessons_mod.as_prompt_block(lessons) + "\n\n"
-    head = ""
+    blocks_synonyms = ""
+    try:
+        import synonymdb
+
+        terms = synonymdb.matched_terms(question)
+        lines = []
+        for term, values in terms:
+            synonyms = [
+                value for value in values if value and value.strip().lower() != term
+            ]
+            if synonyms:
+                lines.append(f"- «{term}»: {', '.join(synonyms)}")
+        if lines:
+            blocks_synonyms = (
+                "Синонимы из словаря, относящиеся к вопросу:\n"
+                + "\n".join(lines)
+                + "\nПоиск учитывает словарь синонимов; сопоставляй формулировки вопроса "
+                "и документов с учётом этих синонимов и не отказывай только из-за "
+                "разных слов.\n\n"
+            )
+    except Exception:
+        pass
+    blocks_correction = correction_block(correction)
+    blocks_examples = ""
     if examples:
         samples = "\n\n".join(
-            f"<example>\nВопрос: {item['question']}\nПравильный ответ: {item['answer']}\n</example>"
+            f"<example>\nВопрос: {item['question']}\n"
+            f"Исправленный ответ: {item['answer']}\n"
+            f"Источник: {item.get('doc_ref') or item.get('doc_name', '')}\n"
+            "</example>"
             for item in examples
         )
-        head = f"Примеры исправленных ответов, учти их стиль и точность:\n\n{samples}\n\n"
+        blocks_examples = (
+            "Похожие исправления администратора — не считай их истиной без проверки. "
+            "Сверяй примеры с фрагментами документации и не переноси факты, которых "
+            "в документации нет:\n\n"
+            f"{samples}\n\n"
+        )
     return (
         "Документация:\n\n"
         + "\n\n".join(blocks)
-        + f"\n\n{blocks_lessons}{head}Вопрос: {question}"
+        + f"\n\n{blocks_lessons}{blocks_synonyms}{blocks_correction}{blocks_examples}"
+        + f"Вопрос: {question}"
     )
 
 
@@ -367,14 +434,20 @@ def capabilities_answer() -> Answer:
     return Answer(text=render_capabilities(), chunks=[], grounded=True)
 
 
-def find_correction(question: str, tenant: str | None = None) -> dict | None:
+def correction_context(
+    question: str, tenant: str | None = None
+) -> tuple[dict | None, list[dict]]:
     try:
         import corrections
 
-        exact, _ = corrections.match(question, tenant=tenant)
-        return exact
+        return corrections.match(question, tenant=tenant)
     except Exception:
-        return None
+        return None, []
+
+
+def find_correction(question: str, tenant: str | None = None) -> dict | None:
+    exact, _ = correction_context(question, tenant)
+    return exact
 
 
 def lesson_examples(question: str, tenant: str | None = None) -> list[dict]:
@@ -387,13 +460,21 @@ def lesson_examples(question: str, tenant: str | None = None) -> list[dict]:
 
 
 def correction_examples(question: str, tenant: str | None = None) -> list[dict]:
-    try:
-        import corrections
+    _, examples = correction_context(question, tenant)
+    return examples
 
-        _, examples = corrections.match(question, tenant=tenant)
-        return examples
-    except Exception:
-        return []
+
+def correction_answer(exact: dict) -> Answer:
+    answer = exact["answer"] + reference_block(
+        exact.get("doc_name", ""), exact.get("doc_pages", "")
+    )
+    return Answer(
+        text=answer,
+        chunks=[],
+        grounded=True,
+        corrected=True,
+        reference=correction_reference(exact),
+    )
 
 
 def ask(
@@ -404,28 +485,17 @@ def ask(
     if is_capabilities_question(question):
         return capabilities_answer()
 
-    exact = find_correction(question, tenant)
-    if exact:
-        answer = exact["answer"] + reference_block(
-            exact.get("doc_name", ""), exact.get("doc_pages", "")
-        )
-        return Answer(
-            text=answer,
-            chunks=[],
-            grounded=True,
-            corrected=True,
-            reference={
-                "doc_name": exact.get("doc_name", ""),
-                "doc_pages": exact.get("doc_pages", ""),
-                "doc_ref": exact.get("doc_ref", ""),
-                "author": exact.get("author", ""),
-                "updated_at": exact.get("updated_at", ""),
-                "correction_id": exact.get("correction_id", 0),
-            },
-        )
+    exact, examples = correction_context(question, tenant)
+    verify = settings.bool_value(
+        "CORRECTION_MODEL_VERIFY", config.CORRECTION_MODEL_VERIFY
+    )
+    if exact and not verify:
+        return correction_answer(exact)
 
     chunks = retrieve(question, top_k, tenant=tenant)
     if not chunks:
+        if exact:
+            return correction_answer(exact)
         return Answer(
             text=empty_index_message(),
             chunks=[],
@@ -442,9 +512,7 @@ def ask(
             {"role": "system", "content": domains.system_prompt(tenant)},
             {
                 "role": "user",
-                "content": build_prompt(
-                    question, chunks, correction_examples(question, tenant), tenant
-                ),
+                "content": build_prompt(question, chunks, examples, tenant, exact),
             },
         ],
         temperature=temperature,
@@ -454,4 +522,11 @@ def ask(
     grounded = NO_ANSWER_MARKER not in text.lower()
     if grounded:
         text += sources_block(chunks)
-    return Answer(text=text, chunks=chunks, grounded=grounded)
+    corrected = bool(exact) and grounded
+    return Answer(
+        text=text,
+        chunks=chunks,
+        grounded=grounded,
+        corrected=corrected,
+        reference=correction_reference(exact) if corrected else None,
+    )

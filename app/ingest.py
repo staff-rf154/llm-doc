@@ -151,17 +151,24 @@ def iter_batches(points: list[dict], batch_size: int):
         yield points[start : start + batch_size]
 
 
-def upsert_batch(client, collection: str, batch: list[dict]) -> None:
-    vectors = vs.embed_passages([p["text"] for p in batch])
-    sparse = vs.embed_sparse([p["text"] for p in batch])
+def upsert_batch(
+    client,
+    collection: str,
+    batch: list[dict],
+    spec: vs.EmbedSpec | None = None,
+    sparse_name: str = "",
+) -> None:
+    vectors = vs.embed_passages([p["text"] for p in batch], spec=spec)
+    sparse = vs.embed_sparse([p["text"] for p in batch], name=sparse_name)
     points = []
     for position, (p, vector) in enumerate(zip(batch, vectors)):
+        payload_vector = {"dense": vector}
         if sparse:
-            vector = {"dense": vector, "sparse": sparse[position]}
+            payload_vector["sparse"] = sparse[position]
         points.append(
             models.PointStruct(
                 id=p["id"],
-                vector=vector,
+                vector=payload_vector,
                 payload={
                     "text": p["text"],
                     "source": p["source"],
@@ -200,11 +207,17 @@ def collect_chunks() -> list[dict]:
     return points
 
 
-def index_single(root: str, path: Path, rel: str) -> dict:
+def index_single(
+    root: str,
+    path: Path,
+    rel: str,
+    spec: vs.EmbedSpec | None = None,
+    sparse_name: str = "",
+) -> dict:
     """Проиндексировать один файл в активную коллекцию (точечное обновление)."""
     client = vs.get_qdrant()
     collection = vs.target_name()
-    vs.ensure_collection(collection)
+    vs.ensure_collection(collection, dim=spec.dim if spec else None)
     document = load_document(path)
     text = document.get("text", "")
     if not text.strip():
@@ -215,7 +228,7 @@ def index_single(root: str, path: Path, rel: str) -> dict:
     points = chunk_points(rel, chunks, pages, document.get("title", ""), parents)
     vs.delete_source_points(rel, collection)
     for batch in iter_batches(points, settings.int_value("INGEST_BATCH_SIZE")):
-        upsert_batch(client, collection, batch)
+        upsert_batch(client, collection, batch, spec=spec, sparse_name=sparse_name)
     stat = path.stat()
     index_state.save_file_progress(
         collection,
@@ -391,6 +404,9 @@ def reindex(
     on_failure: Callable[[list[dict]], None] | None = None,
     gate: threading.Event | None = None,
     stopping: threading.Event | None = None,
+    spec: vs.EmbedSpec | None = None,
+    sparse_name: str = "",
+    swap: bool = True,
 ) -> dict:
     """Полная переиндексация без простоя: новая коллекция + переключение алиаса.
 
@@ -406,13 +422,15 @@ def reindex(
     candidate = open_run["collection"] if open_run else (orphans[-1] if orphans else None)
     if candidate and vs.get_qdrant().collection_exists(candidate):
         collection = candidate
-        vs.ensure_collection(collection)
+        vs.ensure_collection(collection, dim=spec.dim if spec else None)
         index_state.start_run(collection)
         resumed = True
         print(f"возобновление индексации: {collection}")
     else:
         collection = f"{config.QDRANT_COLLECTION}_v{datetime.now().strftime('%Y%m%d-%H%M%S')}"
-        vs.ensure_collection(collection, recreate=True)
+        vs.ensure_collection(
+            collection, recreate=True, dim=spec.dim if spec else None
+        )
         index_state.start_run(collection)
         resumed = False
 
@@ -480,7 +498,9 @@ def reindex(
                 gate.wait()
                 if stopping is not None and stopping.is_set():
                     break
-                upsert_batch(client, collection, batch)
+                upsert_batch(
+                    client, collection, batch, spec=spec, sparse_name=sparse_name
+                )
                 start_at += len(batch)
                 bump("done", len(batch))
                 since_snapshot += len(batch)
@@ -542,7 +562,7 @@ def reindex(
     if progress:
         progress(done_total, total_chunks, skipped, phase="swapping")
 
-    previous = vs.swap_target(collection)
+    previous = vs.swap_target(collection) if swap else None
     index_state.mark_run(collection, "done")
     index_state.forget_run(collection)
     return {

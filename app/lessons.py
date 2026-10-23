@@ -84,19 +84,33 @@ def collection() -> str:
     return config.LESSONS_COLLECTION
 
 
-def ensure_collection() -> None:
-    client = vs.get_qdrant()
-    name = collection()
-    if not client.collection_exists(name):
-        from qdrant_client.http import models
+def ensure_collection(name: str | None = None, dim: int | None = None) -> None:
+    vs.ensure_collection(name or collection(), dim=dim, named=False, sparse=False)
 
-        client.create_collection(
-            collection_name=name,
-            vectors_config=models.VectorParams(
-                size=config.EMBED_DIM,
-                distance=models.Distance.COSINE,
-            ),
-        )
+
+def rebuild(spec: vs.EmbedSpec | None = None, name: str | None = None) -> int:
+    """Полностью пересобрать коллекцию уроков под указанную модель."""
+    from qdrant_client.http import models
+
+    client = vs.get_qdrant()
+    name = name or collection()
+    if client.collection_exists(name):
+        client.delete_collection(name)
+    ensure_collection(name, dim=spec.dim if spec else None)
+    lessons = [item for item in appdb.list_lessons() if item["status"] == "active"]
+    for start in range(0, len(lessons), 128):
+        batch = lessons[start : start + 128]
+        points = [
+            models.PointStruct(
+                id=int(lesson["id"]),
+                vector=vs.embed_query(_search_text(lesson), spec=spec),
+                payload=_payload(lesson),
+            )
+            for lesson in batch
+        ]
+        if points:
+            client.upsert(collection_name=name, points=points, wait=True)
+    return len(lessons)
 
 
 def reindex() -> int:

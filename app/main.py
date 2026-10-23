@@ -161,7 +161,7 @@ class RetrieveRequest(BaseModel):
 
 
 def _deep_health() -> dict:
-    """Проверка Qdrant, коллекции под алиасом, Ollama и записи в SQLite."""
+    """Проверка Qdrant, коллекции под алиасом, Ollama и записи в PostgreSQL."""
     checks: dict = {}
     ok = True
 
@@ -215,16 +215,12 @@ def _deep_health() -> dict:
         checks["ollama"] = {"ok": False, "error": str(exc)}
 
     try:
-        conn = appdb.connect()
-        try:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute("ROLLBACK")
-        finally:
-            conn.close()
-        checks["sqlite"] = {"ok": True}
+        with appdb.connect() as conn:
+            conn.execute("SELECT 1")
+        checks["postgres"] = {"ok": True}
     except Exception as exc:
         ok = False
-        checks["sqlite"] = {"ok": False, "error": str(exc)}
+        checks["postgres"] = {"ok": False, "error": str(exc)}
 
     return {"status": "ok" if ok else "degraded", "deep": True, "checks": checks}
 

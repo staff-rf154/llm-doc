@@ -43,9 +43,25 @@ PY
 echo "Остановка приложения"
 docker compose stop app
 
-echo "Восстановление SQLite"
-python3 - "$DIR" <<'PY'
-import os
+PGUSER=$(python3 -c 'import json,os; p="data/app/db_connection.json"; print(json.load(open(p)).get("user","") if os.path.exists(p) else "")' 2>/dev/null || true)
+PGDB=$(python3 -c 'import json,os; p="data/app/db_connection.json"; print(json.load(open(p)).get("database","") if os.path.exists(p) else "")' 2>/dev/null || true)
+if [ -z "$PGUSER" ]; then
+  PGUSER=$(grep -E '^POSTGRES_USER=' .env 2>/dev/null | cut -d= -f2- || true)
+fi
+if [ -z "$PGDB" ]; then
+  PGDB=$(grep -E '^POSTGRES_DB=' .env 2>/dev/null | cut -d= -f2- || true)
+fi
+PGUSER=${PGUSER:-llm}
+PGDB=${PGDB:-llm}
+if [ -f "$DIR/postgres.dump" ]; then
+  echo "Восстановление PostgreSQL"
+  docker compose exec -T postgres pg_restore -U "$PGUSER" -d "$PGDB" \
+    --clean --if-exists --no-owner --no-privileges --single-transaction \
+    < "$DIR/postgres.dump"
+  echo "postgres.dump восстановлен"
+else
+  echo "postgres.dump нет: восстановление legacy SQLite (потребуется миграция)" >&2
+  python3 - "$DIR/legacy_sqlite" <<'PY'
 import shutil
 import sys
 from pathlib import Path
@@ -58,10 +74,6 @@ mapping = {
     "data_prompts_prompts.db": "data/prompts/prompts.db",
     "data_index_state_index.db": "data/index_state/index.db",
 }
-if (root / "system_password.txt").exists():
-    Path("data/app").mkdir(parents=True, exist_ok=True)
-    shutil.copy2(root / "system_password.txt", "data/app/system_password.txt")
-
 for name, target in mapping.items():
     source = root / name
     if not source.exists():
@@ -76,6 +88,12 @@ for name, target in mapping.items():
     shutil.copy2(source, target_path)
     print(target)
 PY
+fi
+
+if [ -f "$DIR/system_password.txt" ]; then
+  mkdir -p data/app
+  cp -a "$DIR/system_password.txt" data/app/system_password.txt
+fi
 
 if [ "$RESTORE_DOCS" = "1" ] && [ -f "$DIR/docs.tar.gz" ]; then
   echo "Восстановление документации"

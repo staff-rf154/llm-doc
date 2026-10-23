@@ -49,6 +49,38 @@ def _autolearn(request_id: int, tenant: str | None = None) -> None:
         pass
 
 
+def _correction_response(
+    user: dict, question: str, exact: dict, started: float
+) -> StreamingResponse:
+    answer_text = exact["answer"] + rag.reference_block(
+        exact.get("doc_name", ""), exact.get("doc_pages", "")
+    )
+    reference = rag.correction_reference(exact) or {}
+    request_id = appdb.log_request(
+        user,
+        question,
+        answer_text,
+        True,
+        True,
+        0,
+        int((time.time() - started) * 1000),
+        reference,
+        origin="web",
+    )
+    payload = [
+        {"type": "token", "data": answer_text},
+        {"type": "sources", "data": []},
+        {"type": "reference", "data": reference},
+        {"type": "request", "data": {"request_id": request_id}},
+        {"type": "meta", "data": {"grounded": True, "corrected": True}},
+        {"type": "done", "data": ""},
+    ]
+    return StreamingResponse(
+        _sse(payload),
+        media_type="text/event-stream",
+    )
+
+
 def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
     question = req.messages[-1].content
     tenant = auth.tenant_scope(user) or appdb.DEFAULT_TENANT
@@ -70,39 +102,18 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
             media_type="text/event-stream",
         )
 
-    exact = rag.find_correction(question, tenant)
-    if exact:
-        answer_text = exact["answer"] + rag.reference_block(
-            exact.get("doc_name", ""), exact.get("doc_pages", "")
-        )
-        reference = {
-            "doc_name": exact.get("doc_name", ""),
-            "doc_pages": exact.get("doc_pages", ""),
-            "doc_ref": exact.get("doc_ref", ""),
-            "author": exact.get("author", ""),
-            "updated_at": exact.get("updated_at", ""),
-            "correction_id": exact.get("correction_id", 0),
-        }
-        request_id = appdb.log_request(
-            user, question, answer_text, True, True, 0,
-            int((time.time() - started) * 1000), reference,
-        )
-        payload = [
-            {"type": "token", "data": answer_text},
-            {"type": "sources", "data": []},
-            {"type": "reference", "data": reference},
-            {"type": "request", "data": {"request_id": request_id}},
-            {"type": "meta", "data": {"grounded": True, "corrected": True}},
-            {"type": "done", "data": ""},
-        ]
-        return StreamingResponse(
-            _sse(payload),
-            media_type="text/event-stream",
-        )
+    exact, examples = rag.correction_context(question, tenant)
+    verify = settings.bool_value(
+        "CORRECTION_MODEL_VERIFY", config.CORRECTION_MODEL_VERIFY
+    )
+    if exact and not verify:
+        return _correction_response(user, question, exact, started)
 
     chunks = rag.retrieve(question, req.top_k, tenant=tenant)
 
     if not chunks:
+        if exact:
+            return _correction_response(user, question, exact, started)
         text = rag.empty_index_message()
         request_id = appdb.log_request(user, question, text, False, False, 0, 0, origin="web")
         payload = [
@@ -117,9 +128,7 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
             media_type="text/event-stream",
         )
 
-    prompt = rag.build_prompt(
-        question, chunks, rag.correction_examples(question, tenant), tenant
-    )
+    prompt = rag.build_prompt(question, chunks, examples, tenant, exact)
     client = rag.get_client()
 
     def generate():
@@ -173,14 +182,17 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
         if block:
             yield _sse_event({"type": "token", "data": block})
             answer += block
+        corrected = bool(exact) and grounded
+        reference = rag.correction_reference(exact) if corrected else None
         request_id = appdb.log_request(
             user,
             question,
             answer,
             grounded,
-            False,
+            corrected,
             len(chunks),
             int((time.time() - started) * 1000),
+            reference,
             origin="web",
         )
         _autolearn(request_id, tenant)
@@ -203,9 +215,11 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
                 ],
             }
         )
+        if reference:
+            yield _sse_event({"type": "reference", "data": reference})
         yield _sse_event({"type": "request", "data": {"request_id": request_id}})
         yield _sse_event(
-            {"type": "meta", "data": {"grounded": grounded, "corrected": False}}
+            {"type": "meta", "data": {"grounded": grounded, "corrected": corrected}}
         )
         yield _sse_event({"type": "done", "data": ""})
 

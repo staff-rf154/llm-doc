@@ -137,181 +137,172 @@ def _business_families():
         pass
 
     try:
-        conn = appdb.connect()
-    except Exception:
-        return families
+        with appdb.connect() as conn:
+            users = conn.execute(
+                "SELECT COUNT(*) AS total, "
+                "COALESCE(SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END), 0) AS active "
+                "FROM users"
+            ).fetchone()
+            metric = GaugeMetricFamily(
+                "llm_users", "Пользователи", labels=["status"]
+            )
+            metric.add_metric(["total"], int(users["total"]))
+            metric.add_metric(["active"], int(users["active"]))
+            families.append(metric)
 
-    try:
-        users = conn.execute(
-            "SELECT COUNT(*) AS total, "
-            "COALESCE(SUM(CASE WHEN active = 1 THEN 1 ELSE 0 END), 0) AS active "
-            "FROM users"
-        ).fetchone()
-        metric = GaugeMetricFamily(
-            "llm_users", "Пользователи", labels=["status"]
-        )
-        metric.add_metric(["total"], int(users["total"]))
-        metric.add_metric(["active"], int(users["active"]))
-        families.append(metric)
+            req = conn.execute(
+                "SELECT COUNT(*) AS total, "
+                "COALESCE(SUM(CASE WHEN grounded = 1 THEN 1 ELSE 0 END), 0) AS grounded, "
+                "COALESCE(SUM(CASE WHEN corrected = 1 THEN 1 ELSE 0 END), 0) AS corrected, "
+                "COALESCE(SUM(CASE WHEN origin = '' OR origin = 'web' THEN 1 ELSE 0 END), 0) AS web, "
+                "COALESCE(SUM(CASE WHEN origin NOT IN ('', 'web') THEN 1 ELSE 0 END), 0) AS api "
+                "FROM requests"
+            ).fetchone()
+            total_requests = int(req["total"])
 
-        req = conn.execute(
-            "SELECT COUNT(*) AS total, "
-            "COALESCE(SUM(CASE WHEN grounded = 1 THEN 1 ELSE 0 END), 0) AS grounded, "
-            "COALESCE(SUM(CASE WHEN corrected = 1 THEN 1 ELSE 0 END), 0) AS corrected, "
-            "COALESCE(SUM(CASE WHEN origin = '' OR origin = 'web' THEN 1 ELSE 0 END), 0) AS web, "
-            "COALESCE(SUM(CASE WHEN origin NOT IN ('', 'web') THEN 1 ELSE 0 END), 0) AS api "
-            "FROM requests"
-        ).fetchone()
-        total_requests = int(req["total"])
+            origins = GaugeMetricFamily(
+                "llm_requests", "Запросы к ассистенту", labels=["origin"]
+            )
+            origins.add_metric(["web"], int(req["web"]))
+            origins.add_metric(["api"], int(req["api"]))
+            families.append(origins)
 
-        origins = GaugeMetricFamily(
-            "llm_requests", "Запросы к ассистенту", labels=["origin"]
-        )
-        origins.add_metric(["web"], int(req["web"]))
-        origins.add_metric(["api"], int(req["api"]))
-        families.append(origins)
+            quality = GaugeMetricFamily(
+                "llm_answers",
+                "Качество ответов",
+                labels=["kind"],
+            )
+            quality.add_metric(["grounded"], int(req["grounded"]))
+            quality.add_metric(["corrected"], int(req["corrected"]))
+            quality.add_metric(
+                ["ungrounded"], total_requests - int(req["grounded"])
+            )
+            families.append(quality)
 
-        quality = GaugeMetricFamily(
-            "llm_answers",
-            "Качество ответов",
-            labels=["kind"],
-        )
-        quality.add_metric(["grounded"], int(req["grounded"]))
-        quality.add_metric(["corrected"], int(req["corrected"]))
-        quality.add_metric(
-            ["ungrounded"], total_requests - int(req["grounded"])
-        )
-        families.append(quality)
+            ratio = GaugeMetricFamily(
+                "llm_grounded_ratio", "Доля ответов с опорой на документы"
+            )
+            ratio.add_metric(
+                [], (int(req["grounded"]) / total_requests) if total_requests else 0.0
+            )
+            families.append(ratio)
 
-        ratio = GaugeMetricFamily(
-            "llm_grounded_ratio", "Доля ответов с опорой на документы"
-        )
-        ratio.add_metric(
-            [], (int(req["grounded"]) / total_requests) if total_requests else 0.0
-        )
-        families.append(ratio)
+            windows = conn.execute(
+                "SELECT "
+                "(SELECT COUNT(*) FROM requests WHERE created_at >= %s) AS h1, "
+                "(SELECT COUNT(*) FROM requests WHERE created_at >= %s) AS h24, "
+                "(SELECT COUNT(*) FROM requests WHERE created_at >= %s) AS d7",
+                (_iso_ago(hours=1), _iso_ago(hours=24), _iso_ago(days=7)),
+            ).fetchone()
+            window_metric = GaugeMetricFamily(
+                "llm_requests_recent", "Запросы за окно", labels=["window"]
+            )
+            window_metric.add_metric(["1h"], int(windows["h1"]))
+            window_metric.add_metric(["24h"], int(windows["h24"]))
+            window_metric.add_metric(["7d"], int(windows["d7"]))
+            families.append(window_metric)
 
-        windows = conn.execute(
-            "SELECT "
-            "(SELECT COUNT(*) FROM requests WHERE created_at >= ?) AS h1, "
-            "(SELECT COUNT(*) FROM requests WHERE created_at >= ?) AS h24, "
-            "(SELECT COUNT(*) FROM requests WHERE created_at >= ?) AS d7",
-            (_iso_ago(hours=1), _iso_ago(hours=24), _iso_ago(days=7)),
-        ).fetchone()
-        window_metric = GaugeMetricFamily(
-            "llm_requests_recent", "Запросы за окно", labels=["window"]
-        )
-        window_metric.add_metric(["1h"], int(windows["h1"]))
-        window_metric.add_metric(["24h"], int(windows["h24"]))
-        window_metric.add_metric(["7d"], int(windows["d7"]))
-        families.append(window_metric)
+            latency_rows = conn.execute(
+                "SELECT latency_ms FROM requests ORDER BY id DESC LIMIT 1000"
+            ).fetchall()
+            latencies = [int(row["latency_ms"]) for row in latency_rows]
+            latency_metric = GaugeMetricFamily(
+                "llm_request_latency_ms",
+                "Длительность ответа, мс",
+                labels=["quantile"],
+            )
+            for label, q in (("0.5", 0.5), ("0.9", 0.9), ("0.95", 0.95), ("0.99", 0.99)):
+                latency_metric.add_metric([label], _percentile(latencies, q))
+            latency_metric.add_metric(
+                ["avg"], (sum(latencies) / len(latencies)) if latencies else 0.0
+            )
+            families.append(latency_metric)
 
-        latency_rows = conn.execute(
-            "SELECT latency_ms FROM requests ORDER BY id DESC LIMIT 1000"
-        ).fetchall()
-        latencies = [int(row["latency_ms"]) for row in latency_rows]
-        latency_metric = GaugeMetricFamily(
-            "llm_request_latency_ms",
-            "Длительность ответа, мс",
-            labels=["quantile"],
-        )
-        for label, q in (("0.5", 0.5), ("0.9", 0.9), ("0.95", 0.95), ("0.99", 0.99)):
-            latency_metric.add_metric([label], _percentile(latencies, q))
-        latency_metric.add_metric(
-            ["avg"], (sum(latencies) / len(latencies)) if latencies else 0.0
-        )
-        families.append(latency_metric)
+            ratings = conn.execute(
+                "SELECT vote, COUNT(*) AS n FROM ratings GROUP BY vote"
+            ).fetchall()
+            rating_metric = GaugeMetricFamily(
+                "llm_ratings", "Оценки пользователей", labels=["vote"]
+            )
+            rating_values = {row["vote"]: int(row["n"]) for row in ratings}
+            rating_metric.add_metric(["up"], rating_values.get("up", 0))
+            rating_metric.add_metric(["down"], rating_values.get("down", 0))
+            families.append(rating_metric)
 
-        ratings = conn.execute(
-            "SELECT vote, COUNT(*) AS n FROM ratings GROUP BY vote"
-        ).fetchall()
-        rating_metric = GaugeMetricFamily(
-            "llm_ratings", "Оценки пользователей", labels=["vote"]
-        )
-        rating_values = {row["vote"]: int(row["n"]) for row in ratings}
-        rating_metric.add_metric(["up"], rating_values.get("up", 0))
-        rating_metric.add_metric(["down"], rating_values.get("down", 0))
-        families.append(rating_metric)
+            unrated = conn.execute(
+                "SELECT COUNT(*) AS n FROM requests r "
+                "LEFT JOIN ratings t ON t.request_id = r.id "
+                "WHERE t.request_id IS NULL"
+            ).fetchone()
+            unrated_metric = GaugeMetricFamily(
+                "llm_requests_unrated", "Запросы без оценки"
+            )
+            unrated_metric.add_metric([], int(unrated["n"]))
+            families.append(unrated_metric)
 
-        unrated = conn.execute(
-            "SELECT COUNT(*) AS n FROM requests r "
-            "LEFT JOIN ratings t ON t.request_id = r.id "
-            "WHERE t.request_id IS NULL"
-        ).fetchone()
-        unrated_metric = GaugeMetricFamily(
-            "llm_requests_unrated", "Запросы без оценки"
-        )
-        unrated_metric.add_metric([], int(unrated["n"]))
-        families.append(unrated_metric)
+            evals = conn.execute(
+                "SELECT verdict, COUNT(*) AS n FROM request_evals GROUP BY verdict"
+            ).fetchall()
+            eval_metric = GaugeMetricFamily(
+                "llm_request_evals", "Оценки ответов автообучением", labels=["verdict"]
+            )
+            problems = 0
+            for row in evals:
+                count = int(row["n"])
+                eval_metric.add_metric([row["verdict"]], count)
+                if row["verdict"] in ("partial", "wrong", "refused_wrongly"):
+                    problems += count
+            families.append(eval_metric)
 
-        evals = conn.execute(
-            "SELECT verdict, COUNT(*) AS n FROM request_evals GROUP BY verdict"
-        ).fetchall()
-        eval_metric = GaugeMetricFamily(
-            "llm_request_evals", "Оценки ответов автообучением", labels=["verdict"]
-        )
-        problems = 0
-        for row in evals:
-            count = int(row["n"])
-            eval_metric.add_metric([row["verdict"]], count)
-            if row["verdict"] in ("partial", "wrong", "refused_wrongly"):
-                problems += count
-        families.append(eval_metric)
+            problem_metric = GaugeMetricFamily(
+                "llm_eval_problems", "Проблемные ответы по автооценке"
+            )
+            problem_metric.add_metric([], problems)
+            families.append(problem_metric)
 
-        problem_metric = GaugeMetricFamily(
-            "llm_eval_problems", "Проблемные ответы по автооценке"
-        )
-        problem_metric.add_metric([], problems)
-        families.append(problem_metric)
+            issues = conn.execute(
+                "SELECT status, COUNT(*) AS n FROM answer_issues GROUP BY status"
+            ).fetchall()
+            issue_metric = GaugeMetricFamily(
+                "llm_issues", "Замечания к ответам", labels=["status"]
+            )
+            for row in issues:
+                issue_metric.add_metric([row["status"]], int(row["n"]))
+            families.append(issue_metric)
 
-        issues = conn.execute(
-            "SELECT status, COUNT(*) AS n FROM answer_issues GROUP BY status"
-        ).fetchall()
-        issue_metric = GaugeMetricFamily(
-            "llm_issues", "Замечания к ответам", labels=["status"]
-        )
-        for row in issues:
-            issue_metric.add_metric([row["status"]], int(row["n"]))
-        families.append(issue_metric)
+            corrections = conn.execute(
+                "SELECT status, COUNT(*) AS n FROM corrections GROUP BY status"
+            ).fetchall()
+            correction_metric = GaugeMetricFamily(
+                "llm_corrections", "Исправления ответов", labels=["status"]
+            )
+            for row in corrections:
+                correction_metric.add_metric([row["status"]], int(row["n"]))
+            families.append(correction_metric)
 
-        corrections = conn.execute(
-            "SELECT status, COUNT(*) AS n FROM corrections GROUP BY status"
-        ).fetchall()
-        correction_metric = GaugeMetricFamily(
-            "llm_corrections", "Исправления ответов", labels=["status"]
-        )
-        for row in corrections:
-            correction_metric.add_metric([row["status"]], int(row["n"]))
-        families.append(correction_metric)
+            lessons = conn.execute(
+                "SELECT status, COUNT(*) AS n FROM lessons GROUP BY status"
+            ).fetchall()
+            lesson_metric = GaugeMetricFamily(
+                "llm_lessons", "Уроки-кандидаты", labels=["status"]
+            )
+            for row in lessons:
+                lesson_metric.add_metric([row["status"]], int(row["n"]))
+            families.append(lesson_metric)
 
-        lessons = conn.execute(
-            "SELECT status, COUNT(*) AS n FROM lessons GROUP BY status"
-        ).fetchall()
-        lesson_metric = GaugeMetricFamily(
-            "llm_lessons", "Уроки-кандидаты", labels=["status"]
-        )
-        for row in lessons:
-            lesson_metric.add_metric([row["status"]], int(row["n"]))
-        families.append(lesson_metric)
-
-        domain_row = conn.execute(
-            "SELECT COUNT(*) AS total, "
-            "COALESCE(SUM(CASE WHEN is_builtin = 1 THEN 1 ELSE 0 END), 0) AS builtin "
-            "FROM domains"
-        ).fetchone()
-        domain_metric = GaugeMetricFamily(
-            "llm_domains", "Направления", labels=["kind"]
-        )
-        domain_metric.add_metric(["total"], int(domain_row["total"]))
-        domain_metric.add_metric(["builtin"], int(domain_row["builtin"]))
-        families.append(domain_metric)
+            domain_row = conn.execute(
+                "SELECT COUNT(*) AS total, "
+                "COALESCE(SUM(CASE WHEN is_builtin = 1 THEN 1 ELSE 0 END), 0) AS builtin "
+                "FROM domains"
+            ).fetchone()
+            domain_metric = GaugeMetricFamily(
+                "llm_domains", "Направления", labels=["kind"]
+            )
+            domain_metric.add_metric(["total"], int(domain_row["total"]))
+            domain_metric.add_metric(["builtin"], int(domain_row["builtin"]))
+            families.append(domain_metric)
     except Exception:
         pass
-    finally:
-        try:
-            conn.close()
-        except Exception:
-            pass
 
     try:
         count_metric = GaugeMetricFamily(

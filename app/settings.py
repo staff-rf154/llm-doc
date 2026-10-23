@@ -69,19 +69,25 @@ PARAMS: list[Param] = [
           hint="Ограничение длины ответа, 0 — не ограничивать"),
     Param("RETRIEVE_TOP_K", "Фрагментов в ответе", "int", group=RETRIEVAL,
           hint="Сколько фрагментов документации попадает в промпт"),
-    Param("CORRECTION_MATCH_THRESHOLD", "Порог подстановки исправления", "float", group=RETRIEVAL,
-          hint="Схожесть вопроса с исправлением, выше — отдаём исправленный ответ как есть"),
+    Param("CORRECTION_MATCH_THRESHOLD", "Порог точного исправления", "float", group=RETRIEVAL,
+          hint="Схожесть вопроса с исправлением, выше — исправление считается точным "
+               "и передаётся модели для сверки"),
     Param("CORRECTION_OVERLAP_WORDS", "Общих слов для точного исправления", "int", group=RETRIEVAL,
           hint="Сколько значимых слов должно совпадать в вопросе и в исправлении, "
                "иначе оно идёт только как пример. 0 — проверка отключена"),
+    Param("CORRECTION_MODEL_VERIFY", "Проверять исправления моделью", "bool", group=RETRIEVAL,
+          hint="Точное исправление передаётся модели вместе с фрагментами документации "
+               "для сверки. Если проверка выключена или индекс пуст, ответ берётся "
+               "из исправления как есть"),
     Param("CORRECTION_EXAMPLES", "Примеров исправлений в промпте", "int", group=RETRIEVAL,
-          hint="Похожие исправления добавляются в промпт как образцы ответа"),
+          hint="Похожие исправления добавляются в промпт как образцы для сверки"),
     Param("SYNONYMS_MAX_VARIANTS", "Вариантов запроса по синонимам", "int", group=RETRIEVAL,
           hint="Сколько вариантов запроса строит словарь синонимов"),
     Param("PROMPTS_MAX", "Стартовых промтов в чате", "int", group=BEHAVIOUR,
           hint="Сколько примеров вопросов показывать на главной"),
-    Param("SYSTEM_PROMPT", "Системная инструкция", "prompt", group=BEHAVIOUR,
-          hint="Как ассистент отвечает: стиль, цитаты, отказ при отсутствии ответа"),
+    Param("SYSTEM_PROMPT", "Системная инструкция по умолчанию", "prompt", group=BEHAVIOUR,
+          hint="Используется для новых направлений и как запасная, если у сферы "
+               "не задана своя системная инструкция"),
     Param("EMBEDDING_MODEL", "Модель эмбеддингов", group=RETRIEVAL, requires_reindex=True,
           hint="Смена требует полной переиндексации документации"),
     Param("E5_QUERY_PREFIX", "Префикс запроса e5", group=RETRIEVAL, requires_reindex=True,
@@ -168,7 +174,7 @@ PARAMS: list[Param] = [
     Param("JUDGE_BASE_URL", "Адрес LLM-судьи", group=AUTOLEARN,
           hint="Пусто — как LLM_BASE_URL; можно внешний API"),
     Param("JUDGE_API_KEY", "Ключ LLM-судьи", group=AUTOLEARN, secret=True,
-          hint="Пусто — как LLM_API_KEY"),
+          hint="По умолчанию — LLM_API_KEY; можно указать ключ внешнего API"),
     Param("JUDGE_FEWSHOT_PATH", "Файл few-shot для судьи", group=AUTOLEARN,
           hint="JSON со списком эталонных вердиктов"),
     Param("QUESTIONGEN_COUNT", "Вопросов для генерации", "int", group=AUTOLEARN,
@@ -199,18 +205,13 @@ PARAMS: list[Param] = [
     Param("PROMPTS_CACHE_TTL", "Кэш стартовых промтов, сек", "int", group=BEHAVIOUR),
     Param("DOCS_BASE_URL", "Базовый адрес документации", group=WEBSITES,
           hint="Префикс ссылок на документы в ответах, если ссылка не задана отдельно"),
-    Param("APP_DB", "База данных приложения", group=INFRA, editable=False),
-    Param("SETTINGS_DB", "База данных настроек", group=INFRA, editable=False),
     Param("QDRANT_URL", "Адрес Qdrant", group=INFRA, editable=False),
     Param("QDRANT_COLLECTION", "Базовая коллекция Qdrant", group=INFRA, editable=False),
     Param("QDRANT_API_KEY", "Ключ Qdrant", group=INFRA, secret=True, editable=False),
-    Param("INDEX_STATE_DB", "База состояния индексации", group=INFRA, editable=False),
     Param("DOCS_DIR", "Каталог документации", group=INFRA, editable=False),
     Param("UPLOADS_DIR", "Каталог загрузок", group=INFRA, editable=False),
     Param("EVAL_DIR", "Каталог оценок", group=INFRA, editable=False),
     Param("BACKUP_DIR", "Каталог резервных копий", group=INFRA, editable=False),
-    Param("PROMPTS_DB", "База стартовых промтов", group=INFRA, editable=False),
-    Param("SYNONYMS_DB", "База синонимов", group=INFRA, editable=False),
     Param("ADMIN_USERNAME", "Логин администратора по умолчанию", group=INFRA, editable=False),
     Param("ADMIN_PASSWORD", "Пароль администратора по умолчанию", group=INFRA, secret=True, editable=False),
     Param("DOMAIN_PROFILE", "Профиль сферы по умолчанию", group=INFRA, editable=False),
@@ -334,7 +335,7 @@ def source(key: str) -> str:
     """Источник действующего значения: domain, local или default."""
     if key in _domain_values():
         return "domain"
-    if key in _stored():
+    if _stored().get(key):
         return "local"
     return "default"
 
@@ -352,11 +353,12 @@ def describe() -> list[dict]:
                 "secret": param.secret,
                 "editable": param.editable,
                 "requires_reindex": param.requires_reindex,
-                "value": effective(param.key),
+                "value": "" if param.secret else effective(param.key),
                 "default": param.default(),
-                "local": local_raw(param.key),
+                "local": "" if param.secret else local_raw(param.key),
                 "source": source(param.key),
                 "overridden": bool(raw(param.key)),
+                "is_set": bool(effective(param.key)) if param.secret else False,
             }
         )
     return items
@@ -386,7 +388,7 @@ def _validate(param: Param, value: str) -> str:
     if param.type == "bool":
         return "1" if text.lower() in BOOL_TRUE else "0"
     if param.secret and not text:
-        raise ValueError(f"{param.label}: значение не может быть пустым")
+        return ""
     if param.options and text not in param.options:
         raise ValueError(f"{param.label}: допустимые значения — {', '.join(param.options)}")
     return text
@@ -493,6 +495,8 @@ def save(values: dict[str, str]) -> dict:
         if not param.editable:
             raise ValueError(f"{param.label}: параметр доступен только для чтения")
         text = _validate(param, str(raw_value))
+        if param.secret and not text:
+            continue
         prospective[key] = text
     errors, warnings = consistency(prospective)
     if errors:
@@ -528,9 +532,7 @@ def _reload_models() -> None:
         import vectorstore as vs
     except Exception:
         return
-    vs.get_sparse_model.cache_clear()
-    vs.get_reranker.cache_clear()
-    vs.get_embedder.cache_clear()
+    vs.clear_models()
 
 
 def reset(key: str) -> None:

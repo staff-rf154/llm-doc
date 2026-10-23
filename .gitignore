@@ -15,3 +15,4 @@ data/eval/report.json
 data/eval/history/
 data/eval/baseline.json
 data/eval/super_test_*.md
+data/postgres/

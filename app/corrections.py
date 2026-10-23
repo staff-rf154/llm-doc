@@ -15,18 +15,46 @@ def _collection() -> str:
     return config.CORRECTIONS_COLLECTION
 
 
-def ensure_collection() -> None:
+def ensure_collection(name: str | None = None, dim: int | None = None) -> None:
+    vs.ensure_collection(name or _collection(), dim=dim, named=False, sparse=False)
+
+
+def _payload(row: dict) -> dict:
+    correction_id = int(row["id"])
+    return {
+        "correction_id": correction_id,
+        "question": row["question"],
+        "answer": row["answer"],
+        "doc_name": row["doc_name"],
+        "doc_pages": row["doc_pages"],
+        "doc_ref": row["doc_ref"],
+        "author": row["author"],
+        "tenant_id": row.get("tenant_id") or tenancy.DEFAULT,
+        "updated_at": row["updated_at"],
+    }
+
+
+def rebuild(spec: vs.EmbedSpec | None = None, name: str | None = None) -> int:
+    """Полностью пересобрать коллекцию исправлений под указанную модель."""
     client = vs.get_qdrant()
-    name = _collection()
+    name = name or _collection()
     if client.collection_exists(name):
-        return
-    client.create_collection(
-        collection_name=name,
-        vectors_config=models.VectorParams(
-            size=config.EMBED_DIM,
-            distance=models.Distance.COSINE,
-        ),
-    )
+        client.delete_collection(name)
+    ensure_collection(name, dim=spec.dim if spec else None)
+    rows = appdb.list_corrections(status="active")
+    for start in range(0, len(rows), 128):
+        batch = rows[start : start + 128]
+        points = [
+            models.PointStruct(
+                id=int(row["id"]),
+                vector=vs.embed_query(row["question"], spec=spec),
+                payload=_payload(row),
+            )
+            for row in batch
+        ]
+        if points:
+            client.upsert(collection_name=name, points=points, wait=True)
+    return len(rows)
 
 
 def reindex() -> int:
@@ -60,17 +88,7 @@ def reindex() -> int:
 
     for row in rows:
         correction_id = int(row["id"])
-        payload = {
-            "correction_id": correction_id,
-            "question": row["question"],
-            "answer": row["answer"],
-            "doc_name": row["doc_name"],
-            "doc_pages": row["doc_pages"],
-            "doc_ref": row["doc_ref"],
-            "author": row["author"],
-            "tenant_id": row.get("tenant_id") or tenancy.DEFAULT,
-            "updated_at": row["updated_at"],
-        }
+        payload = _payload(row)
         current = stored.get(correction_id)
         if current and current["payload"] == payload:
             continue

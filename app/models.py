@@ -99,9 +99,9 @@ def ollama_unload(name: str) -> dict:
 
 
 def ollama_select(name: str) -> dict:
-    appdb.set_setting("LLM_MODEL", name)
-    settings.invalidate()
-    return {"selected": name}
+    import model_handover
+
+    return model_handover.select_llm(name)
 
 
 class PullJob:
@@ -220,30 +220,30 @@ def hf_download(kind: str, name: str) -> dict:
 
         model = SentenceTransformer(name, device="cpu")
         del model
-        vs.get_embedder.cache_clear()
     elif kind == "reranker":
         from sentence_transformers import CrossEncoder
 
         model = CrossEncoder(name, device="cpu")
         del model
-        vs.get_reranker.cache_clear()
     else:
         from fastembed.sparse import SparseTextEmbedding
 
         model = SparseTextEmbedding(model_name=name)
         del model
-        vs.get_sparse_model.cache_clear()
+    vs.clear_models()
     return {"downloaded": name, "kind": kind}
 
 
 def hf_select(kind: str, name: str) -> dict:
     if kind not in HF_KINDS:
         raise ValueError("Неизвестный тип модели")
-    key = HF_KINDS[kind]
-    appdb.set_setting(key, name)
-    settings.invalidate()
-    settings._reload_models()
-    return {"selected": name, "kind": kind, "requires_reindex": key == "EMBEDDING_MODEL"}
+    import model_handover
+
+    if kind == "embedding":
+        return model_handover.start_embedding(name)
+    if kind == "sparse":
+        return model_handover.start_sparse(name)
+    return model_handover.select_reranker(name)
 
 
 def hf_delete(kind: str, name: str) -> dict:
@@ -264,6 +264,7 @@ def hf_delete(kind: str, name: str) -> dict:
 
 
 def summary() -> dict:
+    import model_handover
     from vectorstore import device_info
 
     return {
@@ -277,4 +278,5 @@ def summary() -> dict:
             "cache_dir": str(hf_cache_dir()),
         },
         "device": device_info(),
+        "handover": model_handover.snapshot(),
     }

@@ -13,6 +13,7 @@ import bootstrap
 import capabilities as capabilities_mod
 import config
 import corrections
+import db
 import domains
 import docpages
 import documents as docs_mod
@@ -20,6 +21,7 @@ import evaluation
 import index_state
 import ingest
 import lessons
+import model_handover
 import models
 import questiongen
 import settings
@@ -503,6 +505,36 @@ def reset_param(key: str, user: dict = Depends(auth.require_admin)) -> dict:
     return {"ok": True, "items": settings.describe()}
 
 
+class DbSettingsUpdate(BaseModel):
+    host: str
+    port: int = 5432
+    database: str
+    user: str
+    password: str = ""
+
+
+@router.get("/db")
+def get_db_settings(user: dict = Depends(auth.require_global_admin)) -> dict:
+    return db.describe_settings()
+
+
+@router.post("/db")
+def update_db_settings(
+    payload: DbSettingsUpdate,
+    user: dict = Depends(auth.require_global_admin),
+) -> dict:
+    try:
+        return db.apply_settings(
+            payload.host, payload.port, payload.database, payload.user, payload.password
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(
+            status_code=400, detail=f"Не удалось подключиться: {exc}"
+        ) from exc
+
+
 class ModelName(BaseModel):
     name: str = Field(min_length=1)
 
@@ -564,6 +596,11 @@ def models_hf_select(payload: ModelKind, user: dict = Depends(auth.require_syste
         return models.hf_select(payload.kind, payload.name)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/models/handover")
+def models_handover(user: dict = Depends(auth.require_system)) -> dict:
+    return model_handover.snapshot()
 
 
 @router.delete("/models/hf")
@@ -1228,6 +1265,7 @@ class DomainCreate(BaseModel):
     slug: str | None = None
     description: str | None = None
     system_prompt: str | None = None
+    domain_prompt: str | None = None
     capabilities: list[dict] | None = None
     categories: list[str] | None = None
     terminology: list[str] | None = None
@@ -1243,6 +1281,7 @@ class DomainUpdate(BaseModel):
     slug: str | None = None
     description: str | None = None
     system_prompt: str | None = None
+    domain_prompt: str | None = None
     capabilities: list[dict] | None = None
     categories: list[str] | None = None
     terminology: list[str] | None = None

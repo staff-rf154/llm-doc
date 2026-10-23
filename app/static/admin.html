@@ -576,13 +576,48 @@
       </div>
       <div class="muted" id="set-default"></div>
     </div>
+    <div class="card">
+      <h2>Подключение к PostgreSQL</h2>
+      <div class="muted" style="margin-bottom:10px">
+        Параметры хранятся в <code>data/app/db_connection.json</code> и переопределяют
+        <code>DATABASE_URL</code> из .env. При сохранении соединение проверяется,
+        пул пересоздаётся без перезапуска приложения.
+      </div>
+      <div class="row">
+        <div style="min-width:220px;flex:1">
+          <label class="muted" for="db-host">Хост</label>
+          <input id="db-host" style="width:100%">
+        </div>
+        <div style="min-width:120px">
+          <label class="muted" for="db-port">Порт</label>
+          <input id="db-port" type="number" style="width:100%">
+        </div>
+        <div style="min-width:200px;flex:1">
+          <label class="muted" for="db-name">База</label>
+          <input id="db-name" style="width:100%">
+        </div>
+        <div style="min-width:200px;flex:1">
+          <label class="muted" for="db-user">Пользователь</label>
+          <input id="db-user" style="width:100%">
+        </div>
+        <div style="min-width:220px;flex:1">
+          <label class="muted" for="db-password">Пароль</label>
+          <input id="db-password" type="password" style="width:100%" autocomplete="new-password">
+        </div>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" id="db-save">Проверить и переподключить</button>
+        <span class="muted" id="db-msg"></span>
+      </div>
+      <div class="muted" id="db-source" style="margin-top:8px"></div>
+    </div>
     <div class="card" id="domain-card">
       <h2>Сфера деятельности компании</h2>
       <div class="muted" style="margin-bottom:10px">
-        Определяет, как ассистент отвечает: системную инструкцию поведения модели,
-        перечень «Что я умею», категории вопросов и терминологию. Выберите направление
-        из списка — его инструкция и настройки подставляются сразу. Направления и их
-        системные инструкции хранятся в базе и редактируются во вкладке
+        Определяет, как ассистент отвечает: системную инструкцию сферы, инструкцию
+        сферы деятельности, перечень «Что я умею», категории вопросов и терминологию.
+        Выберите направление и нажмите «Применить» — его инструкции и настройки
+        подставляются сразу. Оба текста можно править здесь или во вкладке
         «Сфера деятельности».
       </div>
       <div class="row">
@@ -593,6 +628,20 @@
       </div>
       <div class="muted" id="domain-desc" style="margin-top:10px"></div>
       <div class="muted" id="domain-extra"></div>
+      <div style="margin-top:14px">
+        <label class="muted" for="set-domain-system">Системная инструкция сферы</label>
+        <textarea id="set-domain-system" rows="8"
+          style="width:100%;box-sizing:border-box;min-height:180px;font-family:inherit;line-height:1.45"></textarea>
+      </div>
+      <div style="margin-top:10px">
+        <label class="muted" for="set-domain-prompt">Инструкция сферы деятельности</label>
+        <textarea id="set-domain-prompt" rows="8"
+          style="width:100%;box-sizing:border-box;min-height:180px;font-family:inherit;line-height:1.45"></textarea>
+      </div>
+      <div class="row" style="margin-top:10px">
+        <button class="primary" id="set-domain-save">Сохранить инструкции сферы</button>
+        <span class="muted" id="set-domain-msg"></span>
+      </div>
     </div>
     <div class="card">
       <h2>Параметры модели и пайплайна</h2>
@@ -740,6 +789,10 @@
         <button class="primary" id="mdl-hf-download">Скачать и выбрать</button>
       </div>
       <div class="muted" id="mdl-hf-msg" style="margin-top:6px"></div>
+      <div id="mdl-handover" style="display:none;margin-top:10px">
+        <div class="bar"><div id="mdl-handover-bar" style="width:0%"></div></div>
+        <div class="muted" id="mdl-handover-text"></div>
+      </div>
       <table id="mdl-hf-table">
         <thead><tr><th>Модель в кэше</th><th></th></tr></thead>
         <tbody></tbody>
@@ -1903,7 +1956,41 @@ async function loadSettings() {
   document.getElementById('set-msg').textContent = '';
   settingsModels = data.llm_models || [];
   renderParams(data.items || [], data.groups || []);
+  loadDbSettings().catch(() => {});
 }
+
+async function loadDbSettings() {
+  const data = await j('/api/admin/db');
+  document.getElementById('db-host').value = data.host || '';
+  document.getElementById('db-port').value = data.port || 5432;
+  document.getElementById('db-name').value = data.database || '';
+  document.getElementById('db-user').value = data.user || '';
+  const password = document.getElementById('db-password');
+  password.value = '';
+  password.placeholder = data.password_set ? 'оставьте пустым, чтобы не менять' : 'пароль не задан';
+  document.getElementById('db-source').textContent =
+    (data.source === 'file' ? 'Источник: data/app/db_connection.json' : 'Источник: DATABASE_URL из .env')
+    + (data.password_set ? ' · пароль задан' : ' · пароль не задан');
+}
+
+document.getElementById('db-save').addEventListener('click', async () => {
+  const msg = document.getElementById('db-msg');
+  const payload = {
+    host: document.getElementById('db-host').value.trim(),
+    port: Number(document.getElementById('db-port').value),
+    database: document.getElementById('db-name').value.trim(),
+    user: document.getElementById('db-user').value.trim(),
+    password: document.getElementById('db-password').value
+  };
+  msg.textContent = 'Проверяю подключение…';
+  try {
+    await j('/api/admin/db', { method: 'POST', body: JSON.stringify(payload) });
+    msg.textContent = 'Подключение обновлено';
+    await loadDbSettings();
+  } catch (err) {
+    msg.textContent = 'ошибка: ' + err.message;
+  }
+});
 
 let domCache = [];
 let domEditing = null;
@@ -1930,13 +2017,46 @@ function renderDomainInfo(data) {
   document.getElementById('domain-desc').textContent = profile.description || '';
   const parts = [];
   parts.push((profile.system_prompt || '').trim()
-    ? 'Системная инструкция задана (' + profile.system_prompt.length + ' символов)'
-    : 'Системная инструкция: общая из настроек');
+    ? 'Системная инструкция сферы задана (' + profile.system_prompt.length + ' символов)'
+    : 'Системная инструкция сферы: общая из настроек');
+  parts.push((profile.domain_prompt || '').trim()
+    ? 'Инструкция сферы задана (' + profile.domain_prompt.length + ' символов)'
+    : 'Инструкция сферы: не задана');
+  const systemField = document.getElementById('set-domain-system');
+  const domainField = document.getElementById('set-domain-prompt');
+  if (systemField) systemField.value = profile.system_prompt || '';
+  if (domainField) domainField.value = profile.domain_prompt || '';
   if ((profile.categories || []).length) parts.push('Категории: ' + profile.categories.join(', '));
   if ((profile.terminology || []).length) parts.push('Термины: ' + profile.terminology.join(', '));
   if ((profile.sample_questions || []).length) parts.push('Примеры вопросов: ' + profile.sample_questions.join('; '));
   document.getElementById('domain-extra').textContent = parts.join(' · ');
 }
+
+document.getElementById('domain-select').addEventListener('change', () => {
+  const slug = document.getElementById('domain-select').value;
+  const profile = domCache.find(item => item.slug === slug);
+  if (!profile) return;
+  renderDomainInfo({ profile });
+  document.getElementById('domain-msg').textContent = '';
+  document.getElementById('set-domain-msg').textContent = '';
+});
+
+document.getElementById('set-domain-save').addEventListener('click', async () => {
+  const msg = document.getElementById('set-domain-msg');
+  const slug = document.getElementById('domain-select').value;
+  if (!slug) { msg.textContent = 'Выберите сферу деятельности'; return; }
+  try {
+    await j('/api/admin/domains/' + slug, {
+      method: 'PUT',
+      body: JSON.stringify({
+        system_prompt: document.getElementById('set-domain-system').value.trim(),
+        domain_prompt: document.getElementById('set-domain-prompt').value.trim()
+      })
+    });
+    await loadDomain();
+    msg.textContent = 'Инструкции сферы сохранены';
+  } catch (err) { msg.textContent = 'ошибка: ' + err.message; }
+});
 
 document.getElementById('domain-save').addEventListener('click', async () => {
   const msg = document.getElementById('domain-msg');
@@ -1998,7 +2118,8 @@ function renderDomEditor(item) {
     field('Название', 'dom-title', value.title || ''),
     field('Слаг (латиницей, необязательно)', 'dom-slug', value.slug || ''),
     field('Описание', 'dom-description', value.description || ''),
-    area('Системная инструкция поведения модели', 'dom-prompt', value.system_prompt || '', 8),
+    area('Системная инструкция сферы', 'dom-system', value.system_prompt || '', 8),
+    area('Инструкция сферы деятельности', 'dom-domain', value.domain_prompt || '', 8),
     el('div', { className: 'row' }, [
       field('Температура генерации (пусто — общая)', 'dom-temperature', value.temperature != null ? String(value.temperature) : ''),
       el('label', { className: 'muted' }, [
@@ -2115,7 +2236,8 @@ function readDomainForm() {
     title: document.getElementById('dom-title').value.trim(),
     slug: document.getElementById('dom-slug').value.trim() || null,
     description: document.getElementById('dom-description').value.trim(),
-    system_prompt: document.getElementById('dom-prompt').value.trim(),
+    system_prompt: document.getElementById('dom-system').value.trim(),
+    domain_prompt: document.getElementById('dom-domain').value.trim(),
     capabilities: parseCaps(document.getElementById('dom-caps').value),
     categories: splitLines(document.getElementById('dom-cats').value),
     terminology: splitLines(document.getElementById('dom-terms').value),
@@ -2234,6 +2356,12 @@ function paramRow(item) {
     input.value = item.value;
     if (item.type === 'float') input.setAttribute('step', '0.05');
     if (item.type === 'int') input.setAttribute('type', 'number');
+  }
+
+  if (item.secret) {
+    input.value = '';
+    input.placeholder = 'значение скрыто';
+    if (input.tagName === 'INPUT') input.setAttribute('type', 'password');
   }
 
   const label = el('label', {
@@ -2549,6 +2677,7 @@ function renderDocsPager(total) {
 }
 
 let modelTimer = null;
+let handoverTimer = null;
 
 async function loadModels() {
   const data = await j('/api/admin/models');
@@ -2592,6 +2721,34 @@ async function loadModels() {
       el('td', {}, [el('button', { className: 'danger', textContent: 'Удалить из кэша', onclick: () => deleteHf(name) })])
     ]));
   });
+  const handover = data.handover || {};
+  const hbox = document.getElementById('mdl-handover');
+  const htext = document.getElementById('mdl-handover-text');
+  const hbar = document.getElementById('mdl-handover-bar');
+  if (handover.status === 'running' || handover.status === 'done' || handover.status === 'error') {
+    hbox.style.display = '';
+    hbar.style.width = (handover.percent || 0) + '%';
+    if (handover.status === 'running') {
+      const kind = handover.kind === 'embedding' ? 'Перенос эмбеддингов' : 'Переиндексация sparse';
+      htext.textContent = kind + ': ' + (handover.model || '') + ' — '
+        + (handover.stage || '') + ' ' + (handover.percent || 0) + '%';
+      if (!handoverTimer) handoverTimer = setInterval(loadModels, 2000);
+    } else {
+      if (handoverTimer) { clearInterval(handoverTimer); handoverTimer = null; }
+      if (handover.status === 'done') {
+        const r = handover.result || {};
+        htext.textContent = 'Готово: ' + (handover.model || '') + ' · уроки ' + (r.lessons || 0)
+          + ', исправления ' + (r.corrections || 0) + ', синонимы ' + (r.synonyms || 0)
+          + ', промты ' + (r.prompts || 0) + ', вопросы ' + (r.generated_questions || 0);
+      } else {
+        htext.textContent = 'Ошибка: ' + (handover.error || '');
+      }
+    }
+  } else {
+    hbox.style.display = 'none';
+    if (handoverTimer) { clearInterval(handoverTimer); handoverTimer = null; }
+  }
+
   const pull = data.pull || {};
   const progress = document.getElementById('mdl-pull-progress');
   if (pull.status === 'running') {
@@ -2609,9 +2766,16 @@ async function loadModels() {
 }
 
 async function selectOllama(name) {
-  try { await j('/api/admin/models/ollama/select', { method: 'POST', body: JSON.stringify({ name }) });
-    document.getElementById('mdl-msg').textContent = 'Активная модель: ' + name; loadModels();
-  } catch (err) { document.getElementById('mdl-msg').textContent = err.message; }
+  const msg = document.getElementById('mdl-msg');
+  msg.textContent = 'Прогреваю модель ' + name + '…';
+  try {
+    const res = await j('/api/admin/models/ollama/select', { method: 'POST', body: JSON.stringify({ name }) });
+    const r = res.inherited || {};
+    msg.textContent = 'Активная модель: ' + name + ' · унаследовано: уроки ' + (r.lessons || 0)
+      + ', исправления ' + (r.corrections || 0) + ', синонимы ' + (r.synonyms || 0)
+      + ', промты ' + (r.prompts || 0) + ', вопросы ' + (r.generated_questions || 0);
+    loadModels();
+  } catch (err) { msg.textContent = err.message; }
 }
 
 async function unloadOllama(name) {
@@ -2647,11 +2811,23 @@ document.getElementById('mdl-hf-download').addEventListener('click', async () =>
   const name = document.getElementById('mdl-hf-name').value.trim();
   const msg = document.getElementById('mdl-hf-msg');
   if (!name) { msg.textContent = 'Введите имя модели'; return; }
+  if (kind !== 'reranker' && !confirm(
+    'Смена модели поиска запустит переиндексацию документов и пересборку уроков и исправлений. '
+    + 'Поиск будет работать на старой модели до завершения. Продолжить?'
+  )) return;
   msg.textContent = 'Скачиваю ' + name + '…';
   try {
     await j('/api/admin/models/hf/download', { method: 'POST', body: JSON.stringify({ kind, name }) });
-    await j('/api/admin/models/hf/select', { method: 'POST', body: JSON.stringify({ kind, name }) });
-    msg.textContent = 'Скачано и выбрано: ' + name;
+    const res = await j('/api/admin/models/hf/select', { method: 'POST', body: JSON.stringify({ kind, name }) });
+    if (res.status === 'running') {
+      msg.textContent = 'Перенос запущен: ' + name;
+      if (!handoverTimer) handoverTimer = setInterval(loadModels, 2000);
+    } else {
+      const r = res.inherited || {};
+      msg.textContent = 'Выбрано: ' + name + ' · уроки ' + (r.lessons || 0)
+        + ', исправления ' + (r.corrections || 0) + ', синонимы ' + (r.synonyms || 0)
+        + ', промты ' + (r.prompts || 0);
+    }
     loadModels();
   } catch (err) { msg.textContent = err.message; }
 });
