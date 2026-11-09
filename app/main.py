@@ -331,6 +331,7 @@ def retrieve(req: RetrieveRequest) -> dict:
                 "url": c.url,
                 "title": c.title,
                 "page": c.page,
+                "page_label": c.page_label,
                 "kind": c.kind,
             }
             for c in chunks

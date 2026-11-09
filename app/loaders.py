@@ -289,7 +289,62 @@ def load_document(path: Path) -> dict:
     if path.suffix.lower() == ".pdf":
         return _read_pdf_document(path)
     text = load_file(path)
-    return {"title": "", "pages": [text] if text else [], "text": text}
+    return {
+        "title": "",
+        "pages": [text] if text else [],
+        "page_labels": ["1"] if text else [],
+        "text": text,
+    }
+
+
+ROMAN_PAGES = {
+    "I": 1, "II": 2, "III": 3, "IV": 4, "V": 5, "VI": 6, "VII": 7,
+    "VIII": 8, "IX": 9, "X": 10, "XI": 11, "XII": 12, "XIII": 13,
+    "XIV": 14, "XV": 15, "XVI": 16, "XVII": 17, "XVIII": 18, "XIX": 19,
+    "XX": 20,
+}
+
+
+def _printed_page_label(text: str, number: int, total: int) -> str:
+    """Номер страницы, напечатанный в самом PDF, а не физический индекс."""
+    lines = [line.strip() for line in (text or "").splitlines() if line.strip()]
+    if not lines:
+        return str(number)
+    head = lines[:3]
+    cleaned = []
+    for line in head:
+        line = re.sub(r"\b\d{1,2}[./]\d{1,2}[./]\d{2,4}\b", " ", line)
+        line = re.sub(r"\b(?:19|20)\d{2}\b", " ", line)
+        cleaned.append(line)
+    candidates: list[tuple[int, int, int, str]] = []
+
+    def add(value: int, label: str, priority: int) -> None:
+        if 1 <= value <= total:
+            candidates.append((abs(value - number), priority, value, label))
+
+    first = cleaned[0]
+    match = re.search(r"(\d{1,4})\s*$", first)
+    if match:
+        add(int(match.group(1)), match.group(1), 0)
+    match = re.search(r"([IVXLCDM]{1,7})\s*$", first.upper())
+    if match and match.group(1) in ROMAN_PAGES:
+        add(ROMAN_PAGES[match.group(1)], match.group(1), 0)
+    match = re.match(r"^(\d{1,4})\b", first)
+    if match:
+        add(int(match.group(1)), match.group(1), 1)
+    for line in head:
+        if re.fullmatch(r"\d{1,4}", line):
+            add(int(line), line, 1)
+        for item in re.finditer(r"(?<![\d.])(\d{1,4})(?![\d.])", line):
+            add(int(item.group(1)), item.group(1), 2)
+        upper = line.upper()
+        if re.fullmatch(r"[IVXLCDM]{1,7}", upper) and upper in ROMAN_PAGES:
+            add(ROMAN_PAGES[upper], upper, 2)
+    candidates = [item for item in candidates if item[0] <= 30]
+    if not candidates:
+        return str(number)
+    candidates.sort()
+    return candidates[0][3]
 
 
 def _read_pdf_document(path: Path) -> dict:
@@ -300,6 +355,10 @@ def _read_pdf_document(path: Path) -> dict:
             pages.append(_normalize(page.extract_text() or ""))
         except Exception:
             pages.append("")
+    labels = [
+        _printed_page_label(text, index, len(pages))
+        for index, text in enumerate(pages, start=1)
+    ]
     title = ""
     try:
         meta_title = (reader.metadata.title or "").strip()
@@ -315,7 +374,12 @@ def _read_pdf_document(path: Path) -> dict:
                     break
             if title:
                 break
-    return {"title": title, "pages": pages, "text": "\n".join(pages)}
+    return {
+        "title": title,
+        "pages": pages,
+        "page_labels": labels,
+        "text": "\n".join(pages),
+    }
 
 
 def iter_documents(root: str):

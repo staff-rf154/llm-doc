@@ -30,7 +30,7 @@ def seed_if_empty() -> int:
 
 def indexed_sources() -> list[str]:
     now = time.time()
-    if now - _sources_cache["at"] < config.PROMPTS_CACHE_TTL:
+    if now - _sources_cache["at"] < settings.int_value("PROMPTS_CACHE_TTL", config.PROMPTS_CACHE_TTL):
         return _sources_cache["sources"]
     client = vs.get_qdrant()
     target = vs.target_name()
@@ -80,7 +80,7 @@ def build_prompts() -> list[dict]:
 
 def get_prompts() -> list[dict]:
     now = time.time()
-    if _cache["items"] and now - _cache["at"] < config.PROMPTS_CACHE_TTL:
+    if _cache["items"] and now - _cache["at"] < settings.int_value("PROMPTS_CACHE_TTL", config.PROMPTS_CACHE_TTL):
         return _cache["items"]
     items = build_prompts()
     _cache.update(at=now, items=items)

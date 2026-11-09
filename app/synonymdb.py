@@ -5,6 +5,7 @@ from datetime import datetime
 
 import config
 import db
+import settings
 
 _LOCK = threading.RLock()
 _INIT_DONE = False
@@ -161,7 +162,7 @@ def _domain_map() -> dict[str, list[str]]:
 def _load_map() -> dict[str, list[str]]:
     ensure_schema()
     now = datetime.now().timestamp()
-    if _cache["map"] and now - _cache["at"] < config.SYNONYMS_CACHE_TTL:
+    if _cache["map"] and now - _cache["at"] < settings.int_value("SYNONYMS_CACHE_TTL", config.SYNONYMS_CACHE_TTL):
         base_map = _cache["map"]
     else:
         base_map = {}

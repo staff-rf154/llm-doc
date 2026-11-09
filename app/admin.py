@@ -545,22 +545,22 @@ class ModelKind(BaseModel):
 
 
 @router.get("/models")
-def models_state(user: dict = Depends(auth.require_system)) -> dict:
+def models_state(user: dict = Depends(auth.require_global_admin)) -> dict:
     return models.summary()
 
 
 @router.post("/models/ollama/pull", status_code=202)
-def models_pull(payload: ModelName, user: dict = Depends(auth.require_system)) -> dict:
+def models_pull(payload: ModelName, user: dict = Depends(auth.require_global_admin)) -> dict:
     return models.job.start(payload.name)
 
 
 @router.get("/models/ollama/pull")
-def models_pull_state(user: dict = Depends(auth.require_system)) -> dict:
+def models_pull_state(user: dict = Depends(auth.require_global_admin)) -> dict:
     return models.job.snapshot()
 
 
 @router.delete("/models/ollama")
-def models_ollama_delete(name: str, user: dict = Depends(auth.require_system)) -> dict:
+def models_ollama_delete(name: str, user: dict = Depends(auth.require_global_admin)) -> dict:
     try:
         return models.ollama_delete(name)
     except Exception as exc:
@@ -568,7 +568,7 @@ def models_ollama_delete(name: str, user: dict = Depends(auth.require_system)) -
 
 
 @router.post("/models/ollama/unload")
-def models_ollama_unload(payload: ModelName, user: dict = Depends(auth.require_system)) -> dict:
+def models_ollama_unload(payload: ModelName, user: dict = Depends(auth.require_global_admin)) -> dict:
     try:
         return models.ollama_unload(payload.name)
     except Exception as exc:
@@ -576,12 +576,12 @@ def models_ollama_unload(payload: ModelName, user: dict = Depends(auth.require_s
 
 
 @router.post("/models/ollama/select")
-def models_ollama_select(payload: ModelName, user: dict = Depends(auth.require_system)) -> dict:
+def models_ollama_select(payload: ModelName, user: dict = Depends(auth.require_global_admin)) -> dict:
     return models.ollama_select(payload.name)
 
 
 @router.post("/models/hf/download", status_code=202)
-def models_hf_download(payload: ModelKind, user: dict = Depends(auth.require_system)) -> dict:
+def models_hf_download(payload: ModelKind, user: dict = Depends(auth.require_global_admin)) -> dict:
     try:
         return models.hf_download(payload.kind, payload.name)
     except ValueError as exc:
@@ -591,7 +591,7 @@ def models_hf_download(payload: ModelKind, user: dict = Depends(auth.require_sys
 
 
 @router.post("/models/hf/select")
-def models_hf_select(payload: ModelKind, user: dict = Depends(auth.require_system)) -> dict:
+def models_hf_select(payload: ModelKind, user: dict = Depends(auth.require_global_admin)) -> dict:
     try:
         return models.hf_select(payload.kind, payload.name)
     except ValueError as exc:
@@ -599,13 +599,13 @@ def models_hf_select(payload: ModelKind, user: dict = Depends(auth.require_syste
 
 
 @router.get("/models/handover")
-def models_handover(user: dict = Depends(auth.require_system)) -> dict:
+def models_handover(user: dict = Depends(auth.require_global_admin)) -> dict:
     return model_handover.snapshot()
 
 
 @router.delete("/models/hf")
 def models_hf_delete(
-    name: str, kind: str = "", user: dict = Depends(auth.require_system)
+    name: str, kind: str = "", user: dict = Depends(auth.require_global_admin)
 ) -> dict:
     try:
         return models.hf_delete(kind, name)
@@ -1031,7 +1031,7 @@ def create_correction(
         tenant_id=tenant or appdb.DEFAULT_TENANT,
     )
     corrections.reindex()
-    if config.TRAINING_FROM_CORRECTIONS:
+    if settings.bool_value("TRAINING_FROM_CORRECTIONS", config.TRAINING_FROM_CORRECTIONS):
         lessons.learn_job.queue(item, user["username"])
     return item
 
@@ -1073,7 +1073,7 @@ def update_correction(
     )
     corrections.reindex()
     updated = appdb.get_correction(correction_id, tenant) or {}
-    if config.TRAINING_FROM_CORRECTIONS and updated:
+    if settings.bool_value("TRAINING_FROM_CORRECTIONS", config.TRAINING_FROM_CORRECTIONS) and updated:
         lessons.learn_job.queue(updated, user["username"])
     return updated
 

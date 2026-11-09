@@ -77,7 +77,9 @@ data/docs/** ──► loaders.py ──► чанкинг ──► multilingua
 2. **Загрузка.** `loaders.py` читает PDF (pypdf), DOCX/PPTX, ODT/ODS/ODP,
    XLSX, MS Office 2003 (`.doc/.xls/.ppt` через `catdoc`, `xls2csv`, `catppt`),
    EPUB, HTML, CSV/TSV, JSON/XML/YAML и другие текстовые форматы. PDF читается
-   постранично, поэтому чанк помнит страницу.
+   постранично: чанк хранит и физический индекс страницы, и напечатанный номер
+   `page_label` (включая римские цифры). Номер определяется по тексту страницы,
+   а при его отсутствии берётся физический индекс.
 3. **Чанкинг.** `ingest.split_text` режет текст `RecursiveCharacterTextSplitter`
    с перекрытием `CHUNK_SIZE` / `CHUNK_OVERLAP`; страницы чанкуются раздельно.
    При `PARENT_CHILD_ENABLED=1` дополнительно собираются крупные родительские
@@ -160,11 +162,12 @@ make reindex
 
 ## Пользователи и авторизация
 
-- Логин/пароль, сессия в HttpOnly cookie `sid` (срок 14 дней).
+- Логин/пароль, сессия в HttpOnly cookie (по умолчанию `sid`, имя задаётся `SESSION_COOKIE`; срок 14 дней).
 - Пароли — PBKDF2-SHA256, 200 000 итераций, индивидуальная соль.
 - Роли: `user` (чат и оценки), `tenant_admin` (кабинет в пределах своего
-  тенанта), `admin` (глобальный кабинет администратора), `system` (скрытый
-  служебный пользователь: модели и общесистемные настройки).
+  тенанта), `admin` (глобальный кабинет администратора и управление моделями),
+  `system` (скрытый служебный пользователь: модели и общесистемные настройки).
+- Модели доступны ролям `admin` и `system`.
 - Первый администратор создаётся при первом старте из `ADMIN_USERNAME` /
   `ADMIN_PASSWORD`, только если таблица пользователей пуста.
 - Системный пользователь создаётся автоматически. Если `SYSTEM_PASSWORD` пуст,
@@ -252,7 +255,7 @@ curl -s -b cookie.txt -X POST localhost:8091/api/admin/users \
 | Модели¹ | Ollama: скачать/выбрать/выгрузить/удалить; Hugging Face: скачать/выбрать/удалить; сведения об устройстве |
 | Индексация | переиндексация (запуск, пауза, прогресс), сайты и обход с прогрессом |
 
-¹ «Модели» доступны только роли `system`; «Сфера деятельности» — `system`,
+¹ «Модели» доступны ролям `admin` и `system`; «Сфера деятельности» — `system`,
 `admin` и `tenant_admin` (в пределах тенанта). Остальные вкладки — `admin` и
 `system`; `tenant_admin` — только перечисленные выше.
 
@@ -302,10 +305,20 @@ PostgreSQL»: хост, порт, база, пользователь и паро
 | Обучение | `LESSONS_MAX`, `LESSONS_MIN_SCORE`, `LESSONS_COLLECTION`, `TRAINING_FROM_CORRECTIONS` |
 | Сайты и обход | `WEB_CRAWL_MAX_PAGES`, `WEB_CRAWL_TIMEOUT`, `WEB_CRAWL_DELAY_MS`, `WEB_CRAWL_RESPECT_ROBOTS`, `WEB_CRAWL_USER_AGENT`, `DOCS_BASE_URL` |
 | Автообучение | `AUTOLEARN_*`, `QUESTIONGEN_*` (включая `VARIANTS`, `SIM_THRESHOLD`, `DEDUP_THRESHOLD`, `SIM_LIMIT`), `BOOTSTRAP_*` |
-| Инфраструктура (только чтение) | `QDRANT_URL`, `QDRANT_COLLECTION`, `QDRANT_API_KEY`, `DOCS_DIR`, `UPLOADS_DIR`, `EVAL_DIR`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `DOMAIN_PROFILE`, `EMBED_DIM` |
+| Инфраструктура (только чтение) | `QDRANT_URL`, `QDRANT_COLLECTION`, `QDRANT_API_KEY`, `DOCS_DIR`, `UPLOADS_DIR`, `EVAL_DIR`, `BACKUP_DIR`, `APP_TITLE`, `SOURCE_ROOTS`, `DOMAIN_PROFILE`, `EMBED_DIM`, `DATABASE_URL`, `APP_DB`, `SETTINGS_DB`, `PROMPTS_DB`, `SYNONYMS_DB`, `INDEX_STATE_DB`, `SESSION_COOKIE`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`, `SYSTEM_USERNAME`, `SYSTEM_PASSWORD` |
 
 Подключение к PostgreSQL не хранится в схеме `settings`: оно задаётся через
 `.env` или карточку «Подключение к PostgreSQL» и файл `data/app/db_connection.json`.
+
+**Секреты.** API не отдаёт значения `LLM_API_KEY`, `QDRANT_API_KEY`,
+`ADMIN_PASSWORD`, `SYSTEM_PASSWORD` и `DATABASE_URL`: для них возвращается
+пустое значение по умолчанию и признак `password_set`.
+
+**Динамические параметры.** `LLM_MAX_TOKENS`, `CORRECTIONS_COLLECTION`,
+`LESSONS_COLLECTION`, `LESSONS_MAX`, `LESSONS_MIN_SCORE`,
+`TRAINING_FROM_CORRECTIONS`, `PROMPTS_CACHE_TTL`, `SYNONYMS_CACHE_TTL`,
+`SYNONYMS_SEED_ON_START` и `DOCS_BASE_URL` читаются из схемы `settings` при
+каждом использовании, поэтому применяются сразу и не требуют перезапуска.
 
 ¹ «Требует переиндексации»: вступит в силу со следующей индексацией, о чём сообщает
 API в поле `requires_reindex`.
@@ -327,7 +340,7 @@ API в поле `requires_reindex`.
 
 ## Модели и управление ими
 
-Вкладка «Модели» (только `system`) управляет генеративной моделью и моделями поиска.
+Вкладка «Модели» (роли `admin` и `system`) управляет генеративной моделью и моделями поиска.
 
 **Модель генерации (Ollama).** Кнопки:
 
@@ -1016,8 +1029,8 @@ make seed-prompts
 |---------|----------------|
 | Название документа | `title` из метаданных PDF; иначе имя файла без расширения |
 | Тип источника | «документация» или «страница сайта» (`kind`) |
-| Страница | `page` из индекса |
-| Ссылка на оригинал | `url`: `<DOCS_BASE_URL><файл>` или адрес страницы |
+| Страница | `page_label` — напечатанный номер страницы (для PDF, включая римские цифры); если номер не найден — физический индекс `page` |
+| Ссылка на оригинал | `url` страницы или `<DOCS_BASE_URL><файл>`, вычисляется на лету: смена `DOCS_BASE_URL` не требует переиндексации |
 | Релевантность | словами и числом `score` |
 | Текст фрагмента | первые ~130 px, кнопка «Показать полностью» |
 
@@ -1039,6 +1052,9 @@ curl -s -b cookie.txt -X POST localhost:8091/retrieve \
 Каждый ответ по документации заканчивается блоком **«Документация, из которой взят
 ответ»**: названия документов, номера страниц и ссылки. Блок формируется кодом
 (`rag.sources_block`, `rag.reference_block`), поэтому присутствует всегда.
+
+Для PDF, где напечатанный номер страницы отличается от физического, в подсказке
+к источнику показывается «Страница в файле PDF: N».
 
 ## REST API
 
@@ -1110,7 +1126,7 @@ curl -s -b cookie.txt -X POST localhost:8091/retrieve \
 | GET | `/backup/status` | копии, размер и возраст последней |
 | GET | `/eval/history` | история прогонов оценки качества |
 | GET | `/autolearn/calibration` | согласие судьи с оценками пользователей |
-| GET/POST | `/models*` | модели (`system`) |
+| GET/POST | `/models*` | модели (`admin`/`system`) |
 
 Формат ответа `/ask`:
 
@@ -1122,10 +1138,12 @@ curl -s -b cookie.txt -X POST localhost:8091/retrieve \
   "request_id": 42,
   "reference": null,
   "sources": [
-    {"source": "SIEM_help.pdf", "chunk": 12, "score": 0.8731, "text": "..."}
+    {"source": "SIEM_help.pdf", "chunk": 12, "score": 0.8731, "page_label": "12", "text": "..."}
   ]
 }
 ```
+
+`/retrieve` возвращает те же поля источников, включая `page_label`.
 
 ```bash
 curl -s -c cookie.txt -X POST localhost:8091/api/login \
@@ -1216,7 +1234,7 @@ PARENT_CHUNK_OVERLAP=200
 ```
 
 - при индексации в payload дочерней точки пишутся `parent_id`, `parent_text`,
-  `parent_chunk` и `parent_page`;
+  `parent_chunk`, `parent_page`, `page_label` и `parent_page_label`;
 - `rag.retrieve` при включённом флаге переранжирует пул кандидатов, затем
   дедуплицирует результаты по `parent_id` и подставляет `parent_text`;
 - без переиндексации режим не даёт эффекта: старые точки не содержат
@@ -1300,7 +1318,7 @@ docker compose exec -T app python eval/super_test.py --user system --password ".
 | `APP_PORT` | `8091` | порт веб-интерфейса и API |
 | `APP_TITLE` | `База знаний` | название базы (переопределяется в кабинете) |
 | `DOMAIN_PROFILE` | `general` | сфера деятельности по умолчанию |
-| `DOCS_BASE_URL` | — | адрес сайта с оригиналами документации |
+| `DOCS_BASE_URL` | — | адрес сайта с оригиналами документации (переопределяется в кабинете) |
 | `SITE_URL` | — | адрес сайта для стартовых промтов |
 | `QDRANT_URL` | `http://qdrant:6333` | адрес Qdrant |
 | `QDRANT_API_KEY` | — | ключ Qdrant |
@@ -1309,7 +1327,7 @@ docker compose exec -T app python eval/super_test.py --user system --password ".
 | `LLM_API_KEY` | `ollama` | ключ LLM |
 | `LLM_MODEL` | `qwen2.5:3b-instruct` | модель генерации |
 | `LLM_TEMPERATURE` | `0.1` | температура |
-| `LLM_MAX_TOKENS` | `0` | лимит токенов, 0 — без лимита |
+| `LLM_MAX_TOKENS` | `0` | лимит токенов ответа для `/ask` и `/chat`, 0 — без лимита |
 | `EMBEDDING_MODEL` | `intfloat/multilingual-e5-base` | модель эмбеддингов |
 | `EMBED_DIM` | `768` | размерность вектора (только чтение) |
 | `SPARSE_MODEL` | `Qdrant/bm25` | sparse-модель |
@@ -1318,6 +1336,7 @@ docker compose exec -T app python eval/super_test.py --user system --password ".
 | `EVAL_DIR` | `/data/eval` | эталонные вопросы, отчёты и few-shot судьи |
 | `BACKUP_DIR` | `/data/backups` | каталог резервных копий |
 | `DATABASE_URL` | `postgresql://llm:...@postgres:5432/llm` | подключение к PostgreSQL; переопределяется `data/app/db_connection.json` |
+| `SESSION_COOKIE` | `sid` | имя cookie сессии |
 | `POSTGRES_USER` | `llm` | пользователь PostgreSQL |
 | `POSTGRES_PASSWORD` | — | пароль PostgreSQL (задайте в `.env`) |
 | `POSTGRES_DB` | `llm` | имя базы PostgreSQL |

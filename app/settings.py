@@ -216,6 +216,17 @@ PARAMS: list[Param] = [
     Param("ADMIN_PASSWORD", "Пароль администратора по умолчанию", group=INFRA, secret=True, editable=False),
     Param("DOMAIN_PROFILE", "Профиль сферы по умолчанию", group=INFRA, editable=False),
     Param("EMBED_DIM", "Размерность эмбеддингов", "int", group=INFRA, editable=False),
+    Param("APP_TITLE", "Название по умолчанию", group=INFRA, editable=False),
+    Param("SOURCE_ROOTS", "Корневые каталоги документов", group=INFRA, editable=False),
+    Param("APP_DB", "БД приложения", group=INFRA, editable=False),
+    Param("SETTINGS_DB", "БД настроек", group=INFRA, editable=False),
+    Param("PROMPTS_DB", "БД промтов", group=INFRA, editable=False),
+    Param("SYNONYMS_DB", "БД синонимов", group=INFRA, editable=False),
+    Param("INDEX_STATE_DB", "БД состояния индексации", group=INFRA, editable=False),
+    Param("DATABASE_URL", "Строка подключения PostgreSQL", group=INFRA, secret=True, editable=False),
+    Param("SESSION_COOKIE", "Имя cookie сессии", group=INFRA, editable=False),
+    Param("SYSTEM_USERNAME", "Логин системного пользователя", group=INFRA, editable=False),
+    Param("SYSTEM_PASSWORD", "Пароль системного пользователя", group=INFRA, secret=True, editable=False),
 ]
 
 CACHE_TTL = 3.0
@@ -354,7 +365,7 @@ def describe() -> list[dict]:
                 "editable": param.editable,
                 "requires_reindex": param.requires_reindex,
                 "value": "" if param.secret else effective(param.key),
-                "default": param.default(),
+                "default": "" if param.secret else param.default(),
                 "local": "" if param.secret else local_raw(param.key),
                 "source": source(param.key),
                 "overridden": bool(raw(param.key)),

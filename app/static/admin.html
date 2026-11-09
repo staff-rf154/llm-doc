@@ -876,6 +876,7 @@ function el(tag, props, children) {
 function applyNav() {
   const role = currentUser && currentUser.role;
   const isSystem = role === 'system';
+  const isGlobalAdmin = isSystem || role === 'admin';
   const isTenant = role === 'tenant_admin';
   const allowed = isTenant
     ? new Set(['overview', 'users', 'requests', 'corrections', 'domains', 'docs'])
@@ -884,13 +885,13 @@ function applyNav() {
     b.style.display = !allowed || allowed.has(b.dataset.tab) ? '' : 'none';
   });
   document.querySelectorAll('nav button[data-tab="models"]').forEach(b => {
-    b.style.display = isSystem ? '' : 'none';
+    b.style.display = isGlobalAdmin ? '' : 'none';
   });
   document.querySelectorAll('nav button[data-tab="domains"]').forEach(b => {
-    b.style.display = isSystem || isTenant || role === 'admin' ? '' : 'none';
+    b.style.display = isGlobalAdmin || isTenant ? '' : 'none';
   });
   const domainCard = document.getElementById('domain-card');
-  if (domainCard) domainCard.style.display = isSystem ? '' : 'none';
+  if (domainCard) domainCard.style.display = isGlobalAdmin ? '' : 'none';
   const roleSelect = document.getElementById('new-role');
   if (roleSelect) {
     roleSelect.querySelectorAll('option[value="admin"], option[value="tenant_admin"]').forEach(o => o.style.display = isTenant ? 'none' : '');
@@ -923,7 +924,7 @@ function loadTab(tab) {
   if (tab === 'synonyms') loadSynonyms();
   if (tab === 'train') { loadLessons(); loadTraining(); }
   if (tab === 'autolearn') { loadAutolearn(); loadQuestionGen(); loadGeneratedQuestions(); loadBootstrap(); loadEvalHistory(); }
-  if (tab === 'settings') { loadSettings(); loadCapabilities(); loadEval(); if (currentUser && currentUser.role === 'system') loadDomain(); }
+  if (tab === 'settings') { loadSettings(); loadCapabilities(); loadEval(); if (currentUser && ['system', 'admin'].includes(currentUser.role)) loadDomain(); }
   if (tab === 'domains') loadDomains();
   if (tab === 'models') loadModels();
   if (tab === 'index') { loadIndex(); loadSites(); }
@@ -1996,7 +1997,7 @@ let domCache = [];
 let domEditing = null;
 
 async function loadDomain() {
-  if (!currentUser || !['system', 'tenant_admin'].includes(currentUser.role)) return;
+  if (!currentUser || !['system', 'admin', 'tenant_admin'].includes(currentUser.role)) return;
   const data = await j('/api/admin/domain');
   domCache = data.profiles || [];
   const select = document.getElementById('domain-select');

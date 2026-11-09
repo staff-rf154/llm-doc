@@ -3,9 +3,10 @@
 from fastapi import Depends, HTTPException, Request, Response
 
 import appdb
+import config
 import settings
 
-COOKIE = "sid"
+COOKIE = config.SESSION_COOKIE
 
 
 class AnonymousUser:

@@ -393,8 +393,8 @@ def drop_all_collections() -> dict:
 
     wanted = {
         cfg.QDRANT_COLLECTION,
-        cfg.CORRECTIONS_COLLECTION,
-        cfg.LESSONS_COLLECTION,
+        settings.value("CORRECTIONS_COLLECTION", cfg.CORRECTIONS_COLLECTION),
+        settings.value("LESSONS_COLLECTION", cfg.LESSONS_COLLECTION),
     }
     dropped: list[str] = []
     for item in client.get_collections().collections:

@@ -21,11 +21,13 @@ class RetrievedChunk:
     url: str = ""
     title: str = ""
     page: int = 0
+    page_label: str = ""
     kind: str = "file"
     parent_id: str = ""
     parent_text: str = ""
     parent_chunk: int = 0
     parent_page: int = 0
+    parent_page_label: str = ""
 
     @property
     def citation(self) -> str:
@@ -57,6 +59,7 @@ class Answer:
                     "url": c.url,
                     "title": c.title,
                     "page": c.page,
+                    "page_label": c.page_label,
                     "kind": c.kind,
                 }
                 for c in self.chunks
@@ -74,6 +77,12 @@ def document_name(chunk: RetrievedChunk) -> str:
     return docpages.human_title(chunk.source, chunk.title, chunk.kind)
 
 
+def page_sort_key(label: str) -> tuple[int, int, str]:
+    """Сортировка номеров страниц: числа по порядку, римские и прочие — после."""
+    text = str(label or "")
+    return (0, int(text), "") if text.isdigit() else (1, 0, text)
+
+
 def sources_block(chunks: list[RetrievedChunk]) -> str:
     """Блок с полными названиями документов и рекомендацией изучить их детально."""
     documents: dict[str, dict] = {}
@@ -86,15 +95,16 @@ def sources_block(chunks: list[RetrievedChunk]) -> str:
                 "url": chunk.url,
             },
         )
-        if chunk.page:
-            entry["pages"].add(int(chunk.page))
+        label = chunk.page_label or (str(chunk.page) if chunk.page else "")
+        if label:
+            entry["pages"].add(label)
         if not entry["url"] and chunk.url:
             entry["url"] = chunk.url
     if not documents:
         return ""
     lines = []
     for source, entry in documents.items():
-        pages = ", ".join(str(page) for page in sorted(entry["pages"]))
+        pages = ", ".join(sorted(entry["pages"], key=page_sort_key))
         line = entry["name"]
         if source and source != entry["name"]:
             line += f" ({source})"
@@ -142,6 +152,15 @@ def query_variants(query: str) -> list[str]:
         return [query]
 
 
+def _display_url(payload: dict) -> str:
+    url = payload.get("url", "")
+    if (payload.get("kind", "file") or "file") != "file" and url:
+        return url
+    import ingest
+
+    return ingest.origin_url(payload.get("source", ""))
+
+
 def _to_chunk(point) -> RetrievedChunk:
     payload = point.payload or {}
     return RetrievedChunk(
@@ -149,14 +168,16 @@ def _to_chunk(point) -> RetrievedChunk:
         source=payload.get("source", "unknown"),
         chunk=int(payload.get("chunk", 0)),
         score=float(point.score),
-        url=payload.get("url", ""),
+        url=_display_url(payload),
         title=payload.get("title", ""),
         page=int(payload.get("page", 0) or 0),
+        page_label=payload.get("page_label", "") or "",
         kind=payload.get("kind", "file") or "file",
         parent_id=payload.get("parent_id", "") or "",
         parent_text=payload.get("parent_text", "") or "",
         parent_chunk=int(payload.get("parent_chunk", 0) or 0),
         parent_page=int(payload.get("parent_page", 0) or 0),
+        parent_page_label=payload.get("parent_page_label", "") or "",
     )
 
 
@@ -300,6 +321,7 @@ def expand_parents(chunks: list[RetrievedChunk]) -> list[RetrievedChunk]:
             chunk.text = chunk.parent_text
             chunk.chunk = chunk.parent_chunk or chunk.chunk
             chunk.page = chunk.parent_page or chunk.page
+            chunk.page_label = chunk.parent_page_label or chunk.page_label
         result.append(chunk)
     return result
 
@@ -516,6 +538,7 @@ def ask(
             },
         ],
         temperature=temperature,
+        max_tokens=settings.int_value("LLM_MAX_TOKENS") or None,
     )
     metrics.observe_llm_usage(getattr(completion, "usage", None), kind="chat")
     text = (completion.choices[0].message.content or "").strip()

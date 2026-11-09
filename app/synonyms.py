@@ -7,6 +7,7 @@
 import os
 
 import config
+import settings
 import synonymdb
 
 SEED: dict[str, list[str]] = {
@@ -52,7 +53,7 @@ def seed() -> int:
 
 def seed_if_empty() -> int:
     synonymdb.ensure_schema()
-    if synonymdb.count() == 0 and config.SYNONYMS_SEED_ON_START:
+    if synonymdb.count() == 0 and settings.bool_value("SYNONYMS_SEED_ON_START", config.SYNONYMS_SEED_ON_START):
         return seed()
     return synonymdb.count()
 

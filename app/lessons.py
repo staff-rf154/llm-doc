@@ -81,7 +81,7 @@ def documentation_context(question: str, limit: int = 3, tenant: str | None = No
 
 
 def collection() -> str:
-    return config.LESSONS_COLLECTION
+    return settings.value("LESSONS_COLLECTION", config.LESSONS_COLLECTION)
 
 
 def ensure_collection(name: str | None = None, dim: int | None = None) -> None:
@@ -221,7 +221,7 @@ def relevant(question: str, limit: int | None = None, tenant: str | None = None)
     name = collection()
     if not client.collection_exists(name):
         return []
-    limit = limit or config.LESSONS_MAX
+    limit = limit or settings.int_value("LESSONS_MAX", config.LESSONS_MAX)
     try:
         points = client.query_points(
             collection_name=name,
@@ -235,7 +235,7 @@ def relevant(question: str, limit: int | None = None, tenant: str | None = None)
     result = []
     for point in points:
         score = float(point.score)
-        if score < config.LESSONS_MIN_SCORE:
+        if score < settings.float_value("LESSONS_MIN_SCORE", config.LESSONS_MIN_SCORE):
             continue
         payload = point.payload or {}
         result.append(

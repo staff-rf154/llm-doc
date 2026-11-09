@@ -588,8 +588,16 @@ function renderSources(el, sources) {
     const score = el_tag('tag ' + rel.cls, rel.text + ' · ' + s.score);
     tags.appendChild(score);
     tags.appendChild(el_tag('tag', s.kind === 'web' ? 'страница сайта' : 'документация'));
-    if (s.page) tags.appendChild(el_tag('tag', 'с. ' + s.page));
-    else if (s.kind !== 'web') tags.appendChild(el_tag('tag', 'страница не определена'));
+    const pageLabel = s.page_label || s.page;
+    if (pageLabel) {
+      const pageTag = el_tag('tag', 'с. ' + pageLabel);
+      if (s.page_label && s.page && String(s.page) !== String(s.page_label)) {
+        pageTag.title = 'Страница в файле PDF: ' + s.page;
+      }
+      tags.appendChild(pageTag);
+    } else if (s.kind !== 'web') {
+      tags.appendChild(el_tag('tag', 'страница не определена'));
+    }
     if (s.url) {
       const link = el_tag('tag web', 'открыть оригинал');
       link.style.cursor = 'pointer';

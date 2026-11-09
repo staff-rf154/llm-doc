@@ -146,6 +146,7 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
                     temperature=domains.temperature(tenant)
                     if domains.temperature(tenant) is not None
                     else settings.float_value("LLM_TEMPERATURE"),
+                    max_tokens=settings.int_value("LLM_MAX_TOKENS") or None,
                     stream=True,
                 )
                 for event in stream:
@@ -209,6 +210,7 @@ def _stream(req: ChatRequest, user: dict) -> StreamingResponse:
                         "url": c.url,
                         "title": c.title,
                         "page": c.page,
+                        "page_label": c.page_label,
                         "kind": c.kind,
                     }
                     for c in chunks

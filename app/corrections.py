@@ -12,7 +12,7 @@ import vectorstore as vs
 
 
 def _collection() -> str:
-    return config.CORRECTIONS_COLLECTION
+    return settings.value("CORRECTIONS_COLLECTION", config.CORRECTIONS_COLLECTION)
 
 
 def ensure_collection(name: str | None = None, dim: int | None = None) -> None:

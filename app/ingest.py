@@ -30,7 +30,7 @@ def split_text(text: str) -> list[str]:
     return [c.strip() for c in splitter.split_text(text) if c.strip()]
 
 
-DOCS_BASE_URL = config.DOCS_BASE_URL
+DOCS_BASE_URL = ""
 
 
 def split_parent_text(text: str) -> list[str]:
@@ -49,15 +49,19 @@ def chunk_points(
     pages: list[int] | None = None,
     title: str = "",
     parents: list[dict] | None = None,
+    labels: list[str] | None = None,
 ) -> list[dict]:
     points = []
     for index, chunk in enumerate(chunks):
+        page = pages[index] if pages and index < len(pages) else 0
+        label = labels[index] if labels and index < len(labels) else ""
         point = {
             "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{rel}:{index}")),
             "text": chunk,
             "source": rel,
             "chunk": index,
-            "page": (pages[index] if pages and index < len(pages) else 0),
+            "page": page,
+            "page_label": label or (str(page) if page else ""),
             "title": title,
             "kind": "file",
             "tenant_id": tenancy.tenant_of_rel(rel),
@@ -70,62 +74,73 @@ def chunk_points(
                     "parent_text": parent["text"],
                     "parent_chunk": parent["chunk"],
                     "parent_page": parent["page"],
+                    "parent_page_label": parent.get("page_label", ""),
                 }
             )
         points.append(point)
     return points
 
 
-def split_with_parents(rel: str, document: dict) -> tuple[list[str], list[int], list[dict]]:
+def split_with_parents(rel: str, document: dict) -> tuple[list[str], list[int], list[dict], list[str]]:
     """Дочерние чанки для индекса и родительский текст для промпта."""
     chunks: list[str] = []
     pages: list[int] = []
+    labels: list[str] = []
     parents: list[dict] = []
+    page_labels = document.get("page_labels") or []
     parent_total = 0
     for number, page_text in enumerate(document.get("pages") or [], start=1):
         if not page_text or not page_text.strip():
             continue
+        label = page_labels[number - 1] if number - 1 < len(page_labels) else str(number)
         for parent_text in split_parent_text(page_text):
             parent = {
                 "id": str(uuid.uuid5(uuid.NAMESPACE_URL, f"{rel}:parent:{parent_total}")),
                 "text": parent_text,
                 "chunk": parent_total,
                 "page": number,
+                "page_label": label,
             }
             parent_total += 1
             for chunk in split_text(parent_text):
                 chunks.append(chunk)
                 pages.append(number)
+                labels.append(label)
                 parents.append(parent)
-    return chunks, pages, parents
+    return chunks, pages, parents, labels
 
 
-def document_chunks(rel: str, document: dict) -> tuple[list[str], list[int], list[dict] | None]:
+def document_chunks(rel: str, document: dict) -> tuple[list[str], list[int], list[dict] | None, list[str]]:
     if settings.bool_value("PARENT_CHILD_ENABLED", config.PARENT_CHILD_ENABLED):
         return split_with_parents(rel, document)
-    chunks, pages = split_with_pages(document)
-    return chunks, pages, None
+    chunks, pages, labels = split_with_pages(document)
+    return chunks, pages, None, labels
 
 
-def split_with_pages(document: dict) -> tuple[list[str], list[int]]:
+def split_with_pages(document: dict) -> tuple[list[str], list[int], list[str]]:
     """Чанки постранично: каждый чанк знает, с какой страницы он взят."""
     chunks: list[str] = []
     pages: list[int] = []
+    labels: list[str] = []
+    page_labels = document.get("page_labels") or []
     for number, page_text in enumerate(document.get("pages") or [], start=1):
         if not page_text or not page_text.strip():
             continue
+        label = page_labels[number - 1] if number - 1 < len(page_labels) else str(number)
         for chunk in split_text(page_text):
             chunks.append(chunk)
             pages.append(number)
-    return chunks, pages
+            labels.append(label)
+    return chunks, pages, labels
 
 
 def origin_url(rel: str) -> str:
     """Ссылка на оригинал документа, если в .env задан DOCS_BASE_URL."""
-    if not DOCS_BASE_URL:
+    base = settings.value("DOCS_BASE_URL", config.DOCS_BASE_URL)
+    if not base:
         return ""
     name = Path(rel).name
-    return f"{DOCS_BASE_URL}{quote(name)}"
+    return f"{base}{quote(name)}"
 
 
 def document_kind(rel: str) -> str:
@@ -174,6 +189,7 @@ def upsert_batch(
                     "source": p["source"],
                     "chunk": p["chunk"],
                     "page": p.get("page", 0),
+                    "page_label": p.get("page_label", "") or "",
                     "title": p.get("title", ""),
                     "kind": p.get("kind", "file"),
                     "tenant_id": p.get("tenant_id") or tenancy.tenant_of_rel(p["source"]),
@@ -184,6 +200,7 @@ def upsert_batch(
                             "parent_text": p["parent_text"],
                             "parent_chunk": p["parent_chunk"],
                             "parent_page": p["parent_page"],
+                            "parent_page_label": p.get("parent_page_label", "") or "",
                         }
                         if p.get("parent_id")
                         else {}
@@ -201,8 +218,8 @@ def collect_chunks() -> list[dict]:
         if not document["text"]:
             print(f"skip empty: {path}")
             continue
-        chunks, pages, parents = document_chunks(rel, document)
-        points.extend(chunk_points(rel, chunks, pages, document.get("title", ""), parents))
+        chunks, pages, parents, labels = document_chunks(rel, document)
+        points.extend(chunk_points(rel, chunks, pages, document.get("title", ""), parents, labels))
         print(f"{rel}: {len(chunks)} chunks")
     return points
 
@@ -222,10 +239,10 @@ def index_single(
     text = document.get("text", "")
     if not text.strip():
         raise ValueError("Файл не содержит текста")
-    chunks, pages, parents = document_chunks(rel, document)
+    chunks, pages, parents, labels = document_chunks(rel, document)
     if not chunks:
         raise ValueError("Файл не содержит текста")
-    points = chunk_points(rel, chunks, pages, document.get("title", ""), parents)
+    points = chunk_points(rel, chunks, pages, document.get("title", ""), parents, labels)
     vs.delete_source_points(rel, collection)
     for batch in iter_batches(points, settings.int_value("INGEST_BATCH_SIZE")):
         upsert_batch(client, collection, batch, spec=spec, sparse_name=sparse_name)
@@ -465,11 +482,11 @@ def reindex(
             if not text:
                 print(f"skip empty: {path}")
                 return
-            chunks, pages, parents = document_chunks(rel, document)
+            chunks, pages, parents, labels = document_chunks(rel, document)
             if not chunks:
                 print(f"skip empty: {path}")
                 return
-            points = chunk_points(rel, chunks, pages, document.get("title", ""), parents)
+            points = chunk_points(rel, chunks, pages, document.get("title", ""), parents, labels)
 
             start_at = 0
             have = already.get(rel, set())
